@@ -33,6 +33,38 @@ import os
 import io
 import base64
 
+# ---------------------------------------------------------------------------
+# WORKAROUND for a known Gradio/gradio_client bug:
+#   TypeError: argument of type 'bool' is not iterable
+# It happens in gradio_client.utils when building the /api schema: a JSON-schema
+# node can legally be a bool (e.g. additionalProperties: true), but the parser
+# does `if "const" in schema` assuming schema is always a dict. We patch the two
+# offending functions to short-circuit when they receive a bool. This makes the
+# API schema build cleanly, so gradio_client can connect. Must run BEFORE gradio
+# is used.
+# ---------------------------------------------------------------------------
+import gradio_client.utils as _gcu
+
+# Capture the ORIGINALS first (so our wrappers call the real ones, not themselves).
+_orig_get_type = _gcu.get_type
+_orig_json_schema = _gcu._json_schema_to_python_type
+
+
+def _safe_get_type(schema):
+    if isinstance(schema, bool):
+        return "bool"
+    return _orig_get_type(schema)
+
+
+def _safe_json_schema_to_python_type(schema, defs=None):
+    if isinstance(schema, bool):
+        return "Any"
+    return _orig_json_schema(schema, defs)
+
+
+_gcu.get_type = _safe_get_type
+_gcu._json_schema_to_python_type = _safe_json_schema_to_python_type
+
 import gradio as gr
 import torch
 from PIL import Image
@@ -147,7 +179,7 @@ def describe_ui(image, facts, sounds, question):
 with gr.Blocks(title="BlindSpot VLM") as demo:
     gr.Markdown(
         "# BlindSpot VLM (Qwen2.5-VL-7B)\n"
-        "The remote 'brain'. The laptop calls **POST /api/describe** (JSON). "
+        "The remote 'brain'. The laptop calls the **/describe** API. "
         "You can also test manually below."
     )
     with gr.Row():
@@ -158,51 +190,21 @@ with gr.Blocks(title="BlindSpot VLM") as demo:
             q_in = gr.Textbox(label="User question ('' = proactive)", value="")
             out = gr.Textbox(label="Answer")
             btn = gr.Button("Describe", variant="primary")
+    # The laptop's gradio_client calls this exact endpoint (api_name="describe")
+    # with an uploaded image file via handle_file(). One clean endpoint.
     btn.click(describe_ui, [img_in, facts_in, sounds_in, q_in], out,
               api_name="describe")
 
 
 # --------------------------------------------------------------------------
-# 2) HTTP POST /api/describe  (primary path the laptop uses)
-# Mounted via the FastAPI app that Gradio runs on, so it lives at the SAME URL.
+# Launch - HF-native. On Hugging Face Spaces the platform launches the app with
+# demo.launch() and owns the port. We do NOT run our own uvicorn/FastAPI server
+# (that caused the second bind on 7861 -> "address already in use").
+#
+# The laptop reaches this via VLM_MODE="gradio" (gradio_client), api_name="/describe".
 # --------------------------------------------------------------------------
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-
-app = FastAPI()
-
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "model": MODEL_ID}
-
-
-@app.post("/api/describe")
-async def api_describe(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        return JSONResponse({"error": "body must be JSON"}, status_code=400)
-
-    try:
-        image = _decode_image(data.get("image", ""))
-    except Exception as e:
-        return JSONResponse({"error": f"bad image: {e}"}, status_code=400)
-
-    answer = _run(
-        image,
-        data.get("facts", ""),
-        data.get("sounds", ""),
-        data.get("question", ""),
-    )
-    return {"answer": answer}
-
-
-# Mount the Gradio UI onto the FastAPI app so BOTH the UI and /api/* share one
-# server + one URL. gr.mount_gradio_app returns the combined app.
-app = gr.mount_gradio_app(app, demo, path="/")
-
 if __name__ == "__main__":
-    import uvicorn
-    # HF Spaces expose port 7860.
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "7860")))
+    # On HF Spaces, call launch() with NO host/port args - the platform sets them.
+    # Passing server_name/server_port made Gradio think localhost was unreachable
+    # and demand share=True -> ValueError. Bare launch() works on Spaces.
+    demo.queue().launch()

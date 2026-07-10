@@ -74,23 +74,23 @@ SPEECH_COOLDOWN_SECONDS = 4.0
 # ---------------------------------------------------------------------------
 # "stub"   -> no network at all; returns a fake canned answer. Use this to test
 #             the whole pipeline WITHOUT spending GPU money. START HERE.
-# "http"   -> POST the frame to the Space's /api/describe route. RECOMMENDED for
-#             the real brain: robust, version-proof, works over the internet.
-# "gradio" -> talk to the Space via gradio_client (alternative to http).
+# "gradio" -> talk to the Hugging Face Space via gradio_client. RECOMMENDED for
+#             the real brain (works reliably on HF Spaces).
+# "http"   -> POST to a custom /api/describe route (only if you self-host a server
+#             that exposes one; the HF Gradio Space does NOT).
 # "openai" -> talk to any OpenAI-compatible /chat/completions endpoint
 #             (vLLM, LM Studio, Ollama, cloud APIs).
 VLM_MODE = os.getenv("BLINDSPOT_VLM", "stub")
 
-# For VLM_MODE="http": the Space's public URL. Either the base URL or the full
-# endpoint works; the client adds /api/describe if you give it the base.
-#   e.g. "https://your-username-blindspot-vlm.hf.space"
-VLM_HTTP_URL = os.getenv("BLINDSPOT_VLM_URL_HTTP",
-                         "https://your-username-blindspot-vlm.hf.space")
-
 # For VLM_MODE="gradio": the Space id ("user/space-name") or full URL.
+#   e.g. "scorp2111/blindspot-vlm"
 VLM_GRADIO_SPACE = os.getenv("BLINDSPOT_VLM_SPACE", "your-username/blindspot-vlm")
 # The named API endpoint exposed by the Space (see vlm_space/app.py).
 VLM_GRADIO_API_NAME = "/describe"
+
+# For VLM_MODE="http" only (custom self-hosted server, not the HF Space).
+VLM_HTTP_URL = os.getenv("BLINDSPOT_VLM_URL_HTTP",
+                         "https://your-username-blindspot-vlm.hf.space")
 
 # For VLM_MODE="openai":
 VLM_OPENAI_URL = os.getenv("BLINDSPOT_VLM_URL", "http://localhost:8000/v1/chat/completions")

@@ -99,10 +99,42 @@ class _StubBackend:
         return "NOTHING"
 
 
+def _patch_gradio_client_schema_bug():
+    """Work around a gradio_client bug that crashes on API schemas containing a
+    boolean node (e.g. additionalProperties: true):
+        TypeError: argument of type 'bool' is not iterable
+    We wrap the two offending helpers so a bool schema returns a safe type
+    instead of crashing. Safe to call multiple times; must run before Client().
+    """
+    try:
+        import gradio_client.utils as _gcu
+    except Exception:
+        return
+    if getattr(_gcu, "_blindspot_patched", False):
+        return
+    _orig_get_type = _gcu.get_type
+    _orig_json = _gcu._json_schema_to_python_type
+
+    def _safe_get_type(schema):
+        if isinstance(schema, bool):
+            return "bool"
+        return _orig_get_type(schema)
+
+    def _safe_json(schema, defs=None):
+        if isinstance(schema, bool):
+            return "Any"
+        return _orig_json(schema, defs)
+
+    _gcu.get_type = _safe_get_type
+    _gcu._json_schema_to_python_type = _safe_json
+    _gcu._blindspot_patched = True
+
+
 class _GradioBackend:
     name = "gradio"
 
     def __init__(self):
+        _patch_gradio_client_schema_bug()  # must run before Client() connects
         from gradio_client import Client, handle_file  # noqa: F401
         self._Client = Client
         self._handle_file = handle_file

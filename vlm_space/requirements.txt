@@ -10,14 +10,21 @@ accelerate>=0.34.0
 # subtly wrong image tokens or load errors.
 qwen-vl-utils>=0.0.8
 
+# The Qwen2.5-VL processor pulls in a video processor that requires torchvision.
+# HF Spaces preinstall torch but NOT torchvision, so add it explicitly.
+torchvision
+
 # For LOAD_4BIT=1 only (needed on a 16 GB T4; NOT needed on L4/A10G/A100).
 bitsandbytes>=0.43.0
 
 pillow>=10.0.0
 
-# Web layer: Gradio UI + a FastAPI HTTP route on the same server.
-gradio>=4.44.0,<5.0.0
-fastapi>=0.110.0
-uvicorn>=0.29.0
+# Web layer: Gradio (serves both the UI and the API the laptop calls).
+# Gradio 5.x on Python 3.10 (Python pinned in README):
+#   - Python 3.10 avoids the 3.13 'audioop' removal crash.
+#   - Gradio 5.x has the API-schema bug fixed ("argument of type 'bool' is not
+#     iterable" seen on 4.44.1's bundled client).
+# The laptop pins a matching gradio_client (see requirements-core.txt).
+gradio==5.9.1
 
 # torch is preinstalled on HF GPU Spaces - do NOT pin it here.
