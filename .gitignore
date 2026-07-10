@@ -1,0 +1,26 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Model weights (downloaded on first run; too big for git) ---
+*.pt
+*.onnx
+yolov8*.pt
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Local secrets / overrides ---
+.env
+config_local.py
+
+# --- Temp audio/output ---
+*.mp3
+*.wav

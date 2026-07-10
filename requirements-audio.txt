@@ -1,0 +1,20 @@
+# BlindSpot AUDIO + SPEECH-TO-TEXT requirements (Tier 3).
+# INSTALL THIS SECOND, and only after requirements-core.txt works.
+#
+# WHY SEPARATE: TensorFlow (for YAMNet) is the heaviest, most install-fragile
+# dependency. Keeping it apart means a TF failure never blocks Tiers 1 & 2.
+# The pipeline auto-detects whether these are present and degrades gracefully.
+#
+# PYTHON: use 3.11 (or 3.10). TensorFlow has NO wheels for 3.13 and this will
+# fail loudly on 3.13 - that's the main reason we pin the Python version.
+
+# --- audio scene (YAMNet via TF Hub) ---
+tensorflow==2.15.0           # last line with easy Windows CPU wheels; YAMNet runs fine on CPU
+tensorflow-hub==0.16.1
+sounddevice==0.4.6           # microphone capture (needs PortAudio; pip wheel bundles it on Windows)
+
+# --- speech-to-text (Whisper) ---
+openai-whisper==20231117
+pynput==1.7.6                # push-to-talk key detection
+# ffmpeg is required by whisper at runtime. On Windows:  winget install Gyan.FFmpeg
+#   (or: choco install ffmpeg). See README "Step 4".

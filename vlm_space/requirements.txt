@@ -1,0 +1,13 @@
+# Requirements for the Hugging Face GPU Space (the VLM brain).
+# These install ON THE SPACE, not on the laptop.
+#
+# Qwen2.5-VL support landed in transformers 4.49+. Pin a known-good recent line.
+transformers>=4.49.0
+accelerate>=0.34.0
+# Qwen vision preprocessing helper.
+qwen-vl-utils>=0.0.8
+# For LOAD_4BIT=1 (fits 7B on a 16 GB T4).
+bitsandbytes>=0.43.0
+pillow
+# torch is preinstalled on HF GPU Spaces; do not pin it here.
+gradio>=4.44.0
