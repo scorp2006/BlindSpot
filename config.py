@@ -34,12 +34,12 @@ TARGET_FPS = 15
 # ---------------------------------------------------------------------------
 # 2. VISION (YOLOv8n)
 # ---------------------------------------------------------------------------
-# nano = smallest/fastest, perfect for a 6 GB card. Ultralytics auto-downloads
-# the weights on first run to the working dir.
-YOLO_MODEL = "yolov8n.pt"
+# rtdetr-x.pt (Extra-Large Transformer model) is extremely accurate, handles
+# small objects and cluttered backgrounds much better, and runs on GPU.
+YOLO_MODEL = "rtdetr-x.pt"
 
-# Ignore detections below this confidence (0-1). 0.45 keeps it from narrating junk.
-YOLO_CONFIDENCE = 0.45
+# Ignore detections below this confidence (0-1). 0.60 keeps it from narrating junk.
+YOLO_CONFIDENCE = 0.60
 
 # Run YOLO on GPU if available, else CPU. "cuda:0" or "cpu" or "auto".
 YOLO_DEVICE = os.getenv("BLINDSPOT_DEVICE", "auto")

@@ -12,7 +12,7 @@ ultralytics==8.3.0            # YOLOv8 (pulls opencv, numpy, etc.)
 opencv-python==4.10.0.84
 
 # --- text-to-speech (neural, needs internet) ---
-edge-tts==6.1.12
+edge-tts>=7.0.0
 playsound==1.2.2             # simple mp3 playback
 pyttsx3==2.90               # offline fallback voice
 
