@@ -167,8 +167,49 @@ class _OpenAIBackend:
         return data["choices"][0]["message"]["content"].strip()
 
 
+class _HttpBackend:
+    """Primary path: POST the frame + hints to the Space's /api/describe route.
+
+    Robust and version-proof (no gradio_client coupling). Matches the FastAPI
+    endpoint in vlm_space/app.py exactly.
+    """
+
+    name = "http"
+
+    def __init__(self):
+        import requests  # noqa: F401
+        self._requests = requests
+        base = config.VLM_HTTP_URL.rstrip("/")
+        # Allow either the base Space URL or the full endpoint.
+        if base.endswith("/api/describe"):
+            self.url = base
+        else:
+            self.url = base + "/api/describe"
+        print(f"[vlm] HTTP endpoint: {self.url}")
+
+    def ask(self, frame_bgr, facts, sounds, question) -> str:
+        import base64
+        b = _bgr_to_jpeg_bytes(frame_bgr)
+        payload = {
+            "image": base64.b64encode(b).decode("ascii"),
+            "facts": facts or "",
+            "sounds": sounds or "",
+            "question": question or "",
+        }
+        headers = {"Content-Type": "application/json"}
+        if config.VLM_API_KEY:
+            headers["Authorization"] = f"Bearer {config.VLM_API_KEY}"
+        resp = self._requests.post(
+            self.url, json=payload, headers=headers, timeout=config.VLM_TIMEOUT
+        )
+        resp.raise_for_status()
+        return str(resp.json().get("answer", "NOTHING")).strip()
+
+
 def _make_backend():
     mode = config.VLM_MODE.lower()
+    if mode == "http":
+        return _HttpBackend()
     if mode == "gradio":
         return _GradioBackend()
     if mode == "openai":

@@ -32,14 +32,22 @@ TARGET_FPS = 15
 
 
 # ---------------------------------------------------------------------------
-# 2. VISION (YOLOv8n)
+# 2. VISION (YOLO)
 # ---------------------------------------------------------------------------
-# rtdetr-x.pt (Extra-Large Transformer model) is extremely accurate, handles
-# small objects and cluttered backgrounds much better, and runs on GPU.
-YOLO_MODEL = "rtdetr-x.pt"
+# Model options (all auto-download on first run):
+#   yolov8n.pt  ~6 MB   fastest, least accurate  (nano)
+#   yolov8s.pt  ~22 MB  fast, good accuracy      (small)
+#   yolov8m.pt  ~50 MB  best balance for 6 GB    (medium)  <-- default
+#   rtdetr-x.pt ~260 MB most accurate BUT ~5-6 GB VRAM, slow on a 3050, and
+#                       still only the same 80 COCO classes. Not recommended here.
+#
+# IMPORTANT: a bigger detector does NOT recognize *new* kinds of objects - every
+# YOLO/RT-DETR model knows the same 80 COCO classes. "Recognize anything" is the
+# VLM's job, not YOLO's. YOLO is just the fast, cheap "something is there" layer.
+YOLO_MODEL = os.getenv("BLINDSPOT_YOLO", "yolov8m.pt")
 
-# Ignore detections below this confidence (0-1). 0.60 keeps it from narrating junk.
-YOLO_CONFIDENCE = 0.60
+# Ignore detections below this confidence (0-1). 0.50 is a good middle ground.
+YOLO_CONFIDENCE = 0.50
 
 # Run YOLO on GPU if available, else CPU. "cuda:0" or "cpu" or "auto".
 YOLO_DEVICE = os.getenv("BLINDSPOT_DEVICE", "auto")
@@ -66,15 +74,22 @@ SPEECH_COOLDOWN_SECONDS = 4.0
 # ---------------------------------------------------------------------------
 # "stub"   -> no network at all; returns a fake canned answer. Use this to test
 #             the whole pipeline WITHOUT spending GPU money. START HERE.
-# "gradio" -> talk to a Hugging Face Gradio Space (see vlm/hf_space/).
+# "http"   -> POST the frame to the Space's /api/describe route. RECOMMENDED for
+#             the real brain: robust, version-proof, works over the internet.
+# "gradio" -> talk to the Space via gradio_client (alternative to http).
 # "openai" -> talk to any OpenAI-compatible /chat/completions endpoint
 #             (vLLM, LM Studio, Ollama, cloud APIs).
 VLM_MODE = os.getenv("BLINDSPOT_VLM", "stub")
 
+# For VLM_MODE="http": the Space's public URL. Either the base URL or the full
+# endpoint works; the client adds /api/describe if you give it the base.
+#   e.g. "https://your-username-blindspot-vlm.hf.space"
+VLM_HTTP_URL = os.getenv("BLINDSPOT_VLM_URL_HTTP",
+                         "https://your-username-blindspot-vlm.hf.space")
+
 # For VLM_MODE="gradio": the Space id ("user/space-name") or full URL.
 VLM_GRADIO_SPACE = os.getenv("BLINDSPOT_VLM_SPACE", "your-username/blindspot-vlm")
-# The named API endpoint exposed by the Space (see hf_space/app.py). Leave as is
-# unless you rename it in the Space.
+# The named API endpoint exposed by the Space (see vlm_space/app.py).
 VLM_GRADIO_API_NAME = "/describe"
 
 # For VLM_MODE="openai":
@@ -110,23 +125,48 @@ PUSH_TO_TALK_KEY = "space"
 
 
 # ---------------------------------------------------------------------------
-# 7. FUSION / TRIGGER-SEVERITY ENGINE - Tier 4
+# 7. THE FUNNEL - tracker + flag engine (turns the 20/sec firehose into
+#    rare, meaningful actions).  See blindspot/flag.py and blindspot/tracker.py.
 # ---------------------------------------------------------------------------
-# Objects we treat as potential hazards when combined with the right sound.
-HAZARD_OBJECTS = {"car", "truck", "bus", "motorcycle", "bicycle", "train"}
 
-# Sound classes (YAMNet labels, matched loosely) that imply motion/danger.
+# --- 7a. Object tracking (to detect "approaching") ---
+# Two boxes count as the "same object" across frames if their overlap (IoU) is
+# at least this. Lower = more forgiving matching (good for fast movement).
+TRACK_IOU_MATCH = 0.20
+# Drop a track after it's been unseen for this many frames.
+TRACK_MAX_MISSES = 8
+# How many recent frames of box-size we keep to measure growth.
+APPROACH_WINDOW_FRAMES = 6
+# An object is "approaching" if its box grew by at least this ratio across the
+# window (1.6 = grew 60%). Higher = only warn on fast loomers.
+APPROACH_GROWTH_RATIO = 1.6
+# ...AND it must already occupy at least this fraction of the frame (so we don't
+# warn about a tiny thing far away that happens to be growing).
+APPROACH_MIN_AREA = 0.04
+
+# --- 7b. Which objects are worth an instant danger warning ---
+# Only these labels trigger the INSTANT local "approaching" warning. (Everything
+# else that grows is ignored - a growing wall isn't a hazard.)
+DANGER_OBJECTS = {
+    "person", "car", "truck", "bus", "motorcycle", "bicycle",
+    "train", "dog", "skateboard",
+}
+
+# --- 7c. Proactive (calm) narration ---
+# Enable the slow proactive VLM tick that fires on big scene changes.
+PROACTIVE_ENABLED = True
+# Minimum seconds between proactive VLM ticks (calm-mode rate limit).
+PROACTIVE_INTERVAL_SECONDS = 8.0
+
+# --- 7d. Global VLM rate limit (protects the paid GPU) ---
+# Never fire the VLM more often than this, no matter the reason.
+VLM_MIN_INTERVAL_SECONDS = 3.0
+
+# --- 7e. Optional sound boost (only used if audio/YAMNet is running) ---
+# If a danger object is approaching AND one of these sounds is heard, we treat it
+# as higher-confidence (the cross-modal sight+sound cue). Purely additive: audio
+# being off never breaks anything.
 HAZARD_SOUNDS = {
     "vehicle", "car", "engine", "truck", "traffic",
     "horn", "honk", "siren", "emergency", "motorcycle", "bus", "train",
 }
-
-# Sound cues that imply a crowd/busy environment.
-CROWD_SOUNDS = {"speech", "babble", "crowd", "chatter", "children", "hubbub"}
-
-# A hazard object must be at least this "big" in the frame (fraction of frame
-# area) to count as "close". Bigger box == closer == scarier.
-HAZARD_CLOSE_AREA = 0.06
-
-# Minimum seconds between two VLM firings, so we never spam the paid GPU.
-VLM_MIN_INTERVAL_SECONDS = 3.0
