@@ -36,6 +36,11 @@ BlindSpot is a **two-part system by design**:
 > app at it. We deploy it on a Hugging Face **GPU Space** — the exact code we use
 > is included in this repo under [`vlm_space/`](vlm_space/).
 
+> 📞 **Want to see it fully running, or need help deploying the VLM?**
+> Reach out to **Abhinav (Team Odyssey)** — we're happy to set up the cloud VLM
+> and give you a live walkthrough:
+> **Phone:** 9346094913 · **Email:** ayyagariabhinav21@gmail.com
+
 ---
 
 ## How it works (architecture)
