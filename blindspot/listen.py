@@ -43,11 +43,8 @@ class PushToTalk:
         print("[listen] Whisper ready.")
 
     def _transcribe(self, waveform: np.ndarray) -> str:
-        # waveform: mono float32 [-1,1] @ 16 kHz. Whisper is multilingual; use
-        # the configured language so Telugu/Hindi questions transcribe correctly.
-        lang = config.LANGUAGES.get(config.RESPONSE_LANGUAGE,
-                                    config.LANGUAGES["en"])["whisper"]
-        result = self._model.transcribe(waveform, fp16=False, language=lang)
+        # waveform: mono float32 [-1,1] @ 16 kHz
+        result = self._model.transcribe(waveform, fp16=False, language="en")
         return (result.get("text") or "").strip()
 
     def _run(self):

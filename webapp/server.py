@@ -133,10 +133,7 @@ def _fire_vlm(frame, facts, sounds, question, tier):
         _question_busy["on"] = True
     flag.mark_vlm_fired()
     recent = list(_recent_said)
-    # Prepend the language directive so the VLM answers in the chosen language.
-    # This uses the existing instruction field -> NO Hugging Face Space change.
-    lang = config.LANGUAGES.get(config.RESPONSE_LANGUAGE, config.LANGUAGES["en"])
-    instruction = (lang["say"] + " " + _instruction["text"]).strip()
+    instruction = _instruction["text"]
 
     def work():
         try:
@@ -282,27 +279,6 @@ def stop():
         _latest["reason"] = "session ended"
         _latest["phone_connected"] = False
     return {"ok": True}
-
-
-@app.get("/lang")
-def get_lang():
-    """Phone asks which language to use for its voice + question recognition."""
-    code = config.RESPONSE_LANGUAGE
-    lang = config.LANGUAGES.get(code, config.LANGUAGES["en"])
-    return {"code": code, "tts": lang["tts"], "name": lang["name"]}
-
-
-@app.post("/lang")
-async def set_lang(request: Request):
-    """Change the response language at runtime (from the phone selector)."""
-    data = await request.json()
-    code = (data.get("code") or "en").lower()
-    if code in config.LANGUAGES:
-        config.RESPONSE_LANGUAGE = code
-        _recent_said.clear()   # old-language memory shouldn't gate new-language lines
-        print(f"[lang] set to {code} ({config.LANGUAGES[code]['name']})")
-    lang = config.LANGUAGES.get(config.RESPONSE_LANGUAGE, config.LANGUAGES["en"])
-    return {"code": config.RESPONSE_LANGUAGE, "tts": lang["tts"], "name": lang["name"]}
 
 
 @app.post("/start")

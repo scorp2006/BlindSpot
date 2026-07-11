@@ -123,11 +123,9 @@ class BlindSpot:
             self._question_busy = True
 
         self.flag.mark_vlm_fired()
-        # snapshot memory + instruction for this call; prepend language directive
-        # (uses the existing instruction path - no Hugging Face Space change).
+        # snapshot memory + instruction for this call
         recent = list(self._recent_said)
-        _lang = config.LANGUAGES.get(config.RESPONSE_LANGUAGE, config.LANGUAGES["en"])
-        instruction = (_lang["say"] + " " + self._instruction).strip()
+        instruction = self._instruction
 
         def work():
             try:
