@@ -72,6 +72,7 @@ class FlagEngine:
         self._last_scene_key = ""
         self._obstruction_streak = 0
         self._danger_said: dict[str, float] = {}
+        self._obstacle_said: dict[str, float] = {}
 
     def _vlm_allowed(self) -> bool:
         return (time.time() - self._last_vlm_fire) >= config.VLM_MIN_INTERVAL_SECONDS
@@ -90,6 +91,34 @@ class FlagEngine:
             self._danger_said[key] = now
             return True
         return False
+
+    def _obstacle_fresh(self, key: str) -> bool:
+        now = time.time()
+        if now - self._obstacle_said.get(key, 0.0) >= config.OBSTACLE_SAY_ONCE_SECONDS:
+            self._obstacle_said[key] = now
+            return True
+        return False
+
+    @staticmethod
+    def _closest_obstacle(stable: list[Track]):
+        """The nearest object that is close AND in the walking path (center of
+        frame). Returns a Track or None. Category-agnostic - a bag counts."""
+        best = None
+        for t in stable:
+            if t.label in config.OBSTACLE_IGNORE:
+                continue
+            if t.area_fraction < config.OBSTACLE_MIN_AREA:
+                continue
+            # is its center within the middle OBSTACLE_PATH_FRACTION of width?
+            x1, _, x2, _ = t.box
+            # frame width: recover from the box's frame ref via horizontal buckets
+            # (tracker keeps horizontal; 'ahead' already means center third). We
+            # accept 'ahead' OR a center-ish box as in-path.
+            in_path = t.horizontal == "ahead"
+            if in_path:
+                if best is None or t.area_fraction > best.area_fraction:
+                    best = t
+        return best
 
     def decide(
         self,
@@ -122,9 +151,8 @@ class FlagEngine:
                 question=question, reason="user question",
             )
 
-        # 🔴 DANGER reflex - instant, local. Suppressed if camera is obstructed
-        # (a hand looming is not a hazard) or the object is obstruction-sized.
         if not obstructed:
+            # 🔴 DANGER reflex - an approaching hazard (box growing fast). Most urgent.
             approaches = [a for a in result.approaches
                           if a.label in config.DANGER_OBJECTS]
             if approaches:
@@ -138,6 +166,23 @@ class FlagEngine:
                         tier="danger", speak_now=msg, urgent=True,
                         fire_vlm=self._vlm_allowed(),
                         reason=f"{ev.label} approaching (growth={ev.growth:.2f})",
+                    )
+
+            # 🟠 OBSTACLE reflex - ANYTHING close and in the walking path, even
+            # stationary, even a bag. A blind user can trip on it, so we MUST say
+            # it (once). This is the core "don't let them walk into things" rule.
+            obstacle = self._closest_obstacle(result.stable_tracks)
+            if obstacle is not None:
+                key = f"obs:{obstacle.id}"
+                if self._obstacle_fresh(key):
+                    where = "right in front of you" if obstacle.horizontal == "ahead" \
+                            else f"ahead on your {obstacle.horizontal}"
+                    art = "an" if obstacle.label[0] in "aeiou" else "a"
+                    msg = f"Careful, {art} {obstacle.label} {where}."
+                    return Decision(
+                        tier="obstacle", speak_now=msg, urgent=True,
+                        fire_vlm=False,
+                        reason=f"{obstacle.label} in path ({obstacle.distance})",
                     )
 
         # 🧠 OFFER a frame to the VLM (companion mode). The VLM decides whether to

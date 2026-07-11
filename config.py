@@ -153,13 +153,29 @@ APPROACH_MIN_AREA = 0.04
 OBSTRUCTION_AREA = 0.82
 OBSTRUCTION_MIN_FRAMES = 5
 
-# --- 7b. Which objects are worth an instant danger warning ---
-# Only these labels trigger the INSTANT local "approaching" warning. (Everything
-# else that grows is ignored - a growing wall isn't a hazard.)
+# --- 7b. Safety: obstacles + approaching hazards ---
+# APPROACHING hazards (box growing fast) - these get the most urgent warning.
 DANGER_OBJECTS = {
     "person", "car", "truck", "bus", "motorcycle", "bicycle",
     "train", "dog", "skateboard",
 }
+
+# OBSTACLE reflex (the "don't let them trip" rule): ANY object - chair, bag,
+# box, table, backpack, person, anything - that is close AND in the walking path
+# gets an instant caution, even if it's stationary and not in DANGER_OBJECTS.
+# A blind user can trip on a bag; announcing it is our job.
+#
+# An object counts as an obstacle-in-path if:
+#   - its box is at least OBSTACLE_MIN_AREA of the frame (i.e. close), AND
+#   - its center is within the middle OBSTACLE_PATH_FRACTION of the frame width
+#     (i.e. roughly in front, where you'd walk into it).
+OBSTACLE_MIN_AREA = 0.06          # ~"close" bucket; big enough to trip on
+OBSTACLE_PATH_FRACTION = 0.60     # center 60% of width counts as "in your path"
+# Never repeat the same obstacle warning within this many seconds.
+OBSTACLE_SAY_ONCE_SECONDS = 8.0
+# Objects that are never worth warning about as trip hazards (too small / part of
+# the scene, not on the floor). Tune as needed.
+OBSTACLE_IGNORE = {"tie", "clock", "kite", "frisbee"}
 
 # --- 7c. The VLM is the mind ---
 # Instead of Python deciding WHAT and WHEN to narrate, we simply OFFER the VLM a

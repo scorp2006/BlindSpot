@@ -231,7 +231,6 @@ function on(id, v){ $(id).classList.toggle('on', !!v); }
 async function poll(){
   try{
     const s = await (await fetch("/state")).json();
-    $("conn").className = "conn live"; $("connText").textContent = "live";
     $("stat-mode").textContent = "vlm · " + (s.vlm_mode || (window.__mode||"?"));
 
     const t = s.tier || "silent";
@@ -270,19 +269,24 @@ async function poll(){
       }).join("");
     }
 
-    // pipeline lights
-    on('n-cam', true);
-    on('n-yolo', (s.objects||[]).length>0);
-    on('n-flag', t!=="silent");
-    on('n-vlm', ["proactive","question","danger"].includes(t));
-    on('n-voice', !!s.spoken && t!=="silent");
+    // connection reflects the PHONE, not just the server
+    const phone = !!s.phone_connected;
+    $("conn").className = phone ? "conn live" : "conn";
+    $("connText").textContent = s.running===false ? "session ended"
+                              : (phone ? "phone live" : "phone disconnected");
 
-    // metrics
-    frames++;
+    // pipeline lights (only when the phone is actually feeding frames)
+    on('n-cam', phone);
+    on('n-yolo', phone && (s.objects||[]).length>0);
+    on('n-flag', phone && t!=="silent" && t!=="stopped");
+    on('n-vlm', phone && ["offer","question","danger"].includes(t));
+    on('n-voice', phone && !!s.spoken && t!=="silent");
+
+    // metrics - REAL phone frames from the server (not dashboard polls)
     $("m-objs").textContent = (s.objects||[]).length;
-    $("m-frames").textContent = frames;
+    $("m-frames").textContent = s.frames || 0;
     $("m-vlm").textContent = vlmCalls;
-    $("stat-fps").textContent = "frames · " + frames;
+    $("stat-fps").textContent = "frames · " + (s.frames || 0);
   }catch(e){
     $("conn").className = "conn"; $("connText").textContent = "waiting for server";
   }

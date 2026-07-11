@@ -47,6 +47,16 @@ print("[server] loading models...")
 vision = VisionModel()
 flag = FlagEngine()
 brain = VLMBrain()
+
+# Phone audio (YAMNet) is optional + lazy - only loads if the phone streams audio.
+_phone_audio = None
+def _get_phone_audio():
+    global _phone_audio
+    if _phone_audio is None:
+        from blindspot.audio import PhoneAudio
+        _phone_audio = PhoneAudio()
+    return _phone_audio
+
 print("[server] models ready.")
 
 # Latest state, pushed to the dashboard.
@@ -59,11 +69,16 @@ _latest = {
     "spoken": "",       # last thing spoken to the user
     "vlm_log": [],      # recent VLM answers
     "ts": 0.0,
+    "frames": 0,        # REAL phone frames processed (not dashboard polls)
+    "last_frame_ts": 0.0,  # when we last received a phone frame
+    "phone_connected": False,
+    "running": True,    # False after /stop
 }
 _vlm_busy = threading.Lock()
 _question_busy = {"on": False}
 _recent_said: list[str] = []       # memory the VLM sees (no-repeat)
 _instruction = {"text": ""}        # user's standing "behave like this" wish
+_audio_warned = {"done": False}    # so we log the "no TF" note only once
 
 
 def _remember_said(text: str):
@@ -129,6 +144,9 @@ def health():
 async def frame(request: Request):
     """Phone posts a frame (+ optional question). We run the pipeline and reply
     with anything that should be spoken right now."""
+    if not _latest["running"]:
+        return {"tier": "stopped", "speak": [], "objects": []}
+
     data = await request.json()
     to_speak = []
 
@@ -139,10 +157,21 @@ async def frame(request: Request):
             frame_bgr = _decode_frame(data["image"])
         except Exception as e:
             return JSONResponse({"error": f"bad image: {e}"}, status_code=400)
+        # Count REAL phone frames + mark phone connected.
+        with _state_lock:
+            _latest["frames"] += 1
+            _latest["last_frame_ts"] = time.time()
+            _latest["phone_connected"] = True
 
     question = (data.get("question") or "").strip()
-    a_words: set[str] = set()   # (browser doesn't send YAMNet; audio stays laptop-side if enabled)
+    # Environmental sound now comes from the PHONE (via /audio), classified by
+    # YAMNet on the server. Read the latest result if the phone has streamed any.
+    a_words: set[str] = set()
     a_facts = ""
+    if _phone_audio is not None:
+        ar = _phone_audio.latest()
+        a_words = ar.label_set()
+        a_facts = ar.facts_line()
 
     if frame_bgr is None:
         # Question with no fresh frame -> nothing to see; still let VLM try.
@@ -191,11 +220,60 @@ async def frame(request: Request):
     return {"tier": decision.tier, "speak": to_speak, "objects": _latest["objects"]}
 
 
+@app.post("/audio")
+async def audio(request: Request):
+    """Phone streams mic audio here (base64 float32 PCM @16kHz mono). We feed it
+    to YAMNet so environmental sound works on the phone."""
+    if not _latest["running"]:
+        return {"ok": False, "stopped": True}
+    data = await request.json()
+    # Sound is OPTIONAL. If YAMNet/TensorFlow isn't installed, or a chunk is bad,
+    # we fail SILENTLY (200 ok:false) so the phone never spams errors and the rest
+    # of the system keeps working without sound.
+    try:
+        raw = base64.b64decode(data.get("pcm", ""))
+        chunk = np.frombuffer(raw, dtype=np.float32)
+        if chunk.size:
+            _get_phone_audio().push(chunk)
+    except Exception as e:
+        if not _audio_warned["done"]:
+            print(f"[phone-audio] disabled ({e})")
+            _audio_warned["done"] = True
+        return {"ok": False, "audio_available": False}
+    with _state_lock:
+        return {"ok": True, "sounds": _latest["sounds"]}
+
+
+@app.post("/stop")
+def stop():
+    """End the session: stop processing, clear state."""
+    with _state_lock:
+        _latest["running"] = False
+        _latest["tier"] = "stopped"
+        _latest["reason"] = "session ended"
+        _latest["phone_connected"] = False
+    return {"ok": True}
+
+
+@app.post("/start")
+def start():
+    """Resume a stopped session."""
+    with _state_lock:
+        _latest["running"] = True
+        _latest["tier"] = "silent"
+        _latest["reason"] = "running"
+    return {"ok": True}
+
+
 @app.get("/state")
 def state():
     """Dashboard polls this (simple + robust; no websocket needed)."""
     with _state_lock:
-        return dict(_latest)
+        s = dict(_latest)
+    # phone is "connected" only if we got a real frame in the last 2.5s
+    s["phone_connected"] = (time.time() - s.get("last_frame_ts", 0.0)) < 2.5 \
+                           and s.get("running", True)
+    return s
 
 
 # --- static pages ---
