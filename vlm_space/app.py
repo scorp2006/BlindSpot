@@ -141,12 +141,15 @@ def build_prompt(facts: str, sounds: str, question: str,
         lines.append("Answer directly and helpfully using what you see. "
                      "If they ask about text, read it exactly, word for word.")
     else:
-        lines.append("No question right now. You are in companion mode. If there is "
-                     "something new, changed, interesting, or a gentle safety note "
-                     "worth sharing, say it warmly. If the scene is essentially the "
-                     "same as what you already said and there is nothing new worth "
-                     "mentioning, reply with the single word NOTHING and stay quiet. "
-                     "It is good and kind to stay quiet when there's nothing new.")
+        lines.append(
+            "No question right now - you are in companion mode. Behave like a "
+            "perceptive friend: focus on what is HAPPENING and what it MEANS, not "
+            "just a list of objects. Notice what people are doing (reaching out for "
+            "a handshake, waving, walking over, talking, offering something), the "
+            "kind of place it is, and anything genuinely useful or interesting. "
+            "Add a short safety note ONLY if something is a real hazard right now. "
+            "If nothing has meaningfully changed since what you already said, reply "
+            "with the single word NOTHING - staying quiet is good and kind.")
     lines.append("Reply with ONE short, natural spoken sentence (under 25 words), "
                  "or exactly NOTHING. No preamble, no lists.")
     return "\n".join(lines)

@@ -151,60 +151,61 @@ class FlagEngine:
                 question=question, reason="user question",
             )
 
+        # --- Safety warning (a QUIET net): compute at most one, say-once. This
+        #     does NOT block the VLM - the companion still describes the scene.
+        safety_msg = ""
+        safety_tier = ""
         if not obstructed:
-            # 🔴 DANGER reflex - an approaching hazard (box growing fast). Most urgent.
+            # approaching hazard first (most urgent)
             approaches = [a for a in result.approaches
                           if a.label in config.DANGER_OBJECTS]
             if approaches:
                 ev = approaches[0]
-                key = f"{ev.track_id}:{ev.horizontal}"
-                if self._danger_fresh(key):
-                    msg = _approach_phrase(ev)
+                if self._danger_fresh(f"{ev.label}:{ev.horizontal}"):
+                    safety_msg = _approach_phrase(ev)
                     if _sound_matches(audio_words, config.HAZARD_SOUNDS):
-                        msg = msg.rstrip(".") + " — I can hear it too."
-                    return Decision(
-                        tier="danger", speak_now=msg, urgent=True,
-                        fire_vlm=self._vlm_allowed(),
-                        reason=f"{ev.label} approaching (growth={ev.growth:.2f})",
-                    )
+                        safety_msg = safety_msg.rstrip(".") + " — I can hear it too."
+                    safety_tier = "danger"
+            # else: a VERY close obstacle directly in the path (trip hazard)
+            if not safety_msg:
+                obs = self._closest_obstacle(result.stable_tracks)
+                if obs is not None:
+                    # key on label+distance (stable) so re-acquired tracks don't
+                    # re-trigger; truly say-once until it changes or time passes.
+                    if self._obstacle_fresh(f"{obs.label}:{obs.distance}:{obs.horizontal}"):
+                        art = "an" if obs.label[0] in "aeiou" else "a"
+                        where = "right in front of you" if obs.horizontal == "ahead" \
+                                else f"on your {obs.horizontal}"
+                        safety_msg = f"Careful, {art} {obs.label} {where}."
+                        safety_tier = "obstacle"
 
-            # 🟠 OBSTACLE reflex - ANYTHING close and in the walking path, even
-            # stationary, even a bag. A blind user can trip on it, so we MUST say
-            # it (once). This is the core "don't let them walk into things" rule.
-            obstacle = self._closest_obstacle(result.stable_tracks)
-            if obstacle is not None:
-                key = f"obs:{obstacle.id}"
-                if self._obstacle_fresh(key):
-                    where = "right in front of you" if obstacle.horizontal == "ahead" \
-                            else f"ahead on your {obstacle.horizontal}"
-                    art = "an" if obstacle.label[0] in "aeiou" else "a"
-                    msg = f"Careful, {art} {obstacle.label} {where}."
-                    return Decision(
-                        tier="obstacle", speak_now=msg, urgent=True,
-                        fire_vlm=False,
-                        reason=f"{obstacle.label} in path ({obstacle.distance})",
-                    )
+        # 🧠 Decide whether to OFFER a frame to the VLM (the primary companion).
+        stable = result.stable_tracks
+        scene_key = self._scene_key(stable)
+        changed = bool(scene_key) and scene_key != self._last_scene_key
+        timer_due = (now - self._last_offer) >= config.PROACTIVE_INTERVAL_SECONDS
+        offer = (config.PROACTIVE_ENABLED
+                 and (timer_due or (config.PROACTIVE_ON_CHANGE and changed))
+                 and self._vlm_allowed())
+        if scene_key:
+            self._last_scene_key = scene_key
+        if offer:
+            self._last_offer = now
 
-        # 🧠 OFFER a frame to the VLM (companion mode). The VLM decides whether to
-        # speak or reply NOTHING - we only gate HOW OFTEN we offer.
-        if config.PROACTIVE_ENABLED:
-            stable = result.stable_tracks
-            scene_key = self._scene_key(stable)
-            changed = bool(scene_key) and scene_key != self._last_scene_key
-            timer_due = (now - self._last_offer) >= config.PROACTIVE_INTERVAL_SECONDS
-            change_due = config.PROACTIVE_ON_CHANGE and changed
-            # Offer even if the frame is obstructed/empty - the VLM can say
-            # something helpful ("your camera looks covered") or NOTHING itself.
-            if (timer_due or change_due) and self._vlm_allowed():
-                self._last_offer = now
-                self._last_scene_key = scene_key
-                return Decision(
-                    tier="offer", speak_now="", urgent=False, fire_vlm=True,
-                    reason=f"offer to VLM ({'change' if change_due else 'timer'})",
-                )
-            if scene_key:
-                self._last_scene_key = scene_key
-
+        # Combine: speak the safety note NOW (if any) AND still let the VLM
+        # describe/interpret the scene in the same turn. Human-like: a quick
+        # "watch the chair" plus the ongoing narration.
+        if safety_msg:
+            return Decision(
+                tier=safety_tier, speak_now=safety_msg, urgent=True,
+                fire_vlm=offer,
+                reason=f"{safety_tier} + {'offer' if offer else 'no-offer'}",
+            )
+        if offer:
+            return Decision(
+                tier="offer", speak_now="", urgent=False, fire_vlm=True,
+                reason=f"offer to VLM ({'change' if changed else 'timer'})",
+            )
         return Decision(tier="silent", speak_now="", urgent=False,
                         fire_vlm=False, reason="nothing to do")
 

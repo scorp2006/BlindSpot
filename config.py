@@ -169,10 +169,14 @@ DANGER_OBJECTS = {
 #   - its box is at least OBSTACLE_MIN_AREA of the frame (i.e. close), AND
 #   - its center is within the middle OBSTACLE_PATH_FRACTION of the frame width
 #     (i.e. roughly in front, where you'd walk into it).
-OBSTACLE_MIN_AREA = 0.06          # ~"close" bucket; big enough to trip on
-OBSTACLE_PATH_FRACTION = 0.60     # center 60% of width counts as "in your path"
+# Obstacle warning is a QUIET safety net, not the main voice. Only fire for
+# things that are genuinely VERY close and directly ahead (a real trip risk) -
+# not a laptop sitting on the desk in front of you. The VLM describes everything
+# else; this reflex is just the instant "watch out" a human friend gives once.
+OBSTACLE_MIN_AREA = 0.22          # must be quite large (very close) to warn
+OBSTACLE_PATH_FRACTION = 0.50     # center 50% of width = "in your path"
 # Never repeat the same obstacle warning within this many seconds.
-OBSTACLE_SAY_ONCE_SECONDS = 8.0
+OBSTACLE_SAY_ONCE_SECONDS = 15.0
 # Objects that are never worth warning about as trip hazards (too small / part of
 # the scene, not on the floor). Tune as needed.
 OBSTACLE_IGNORE = {"tie", "clock", "kite", "frisbee"}

@@ -98,6 +98,7 @@ const video=document.getElementById('video'), startBtn=document.getElementById('
 
 let streaming=false, pendingQuestion="", recog=null, wakeActive=false;
 let audioCtx=null, micStream=null, audioNode=null;
+let questionListening=false;   // true while capturing a question (mic priority)
 const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d');
 
 function speak(text){ if(!text) return;
@@ -130,6 +131,9 @@ async function startMic(){
     for(let i=0; i<input.length; i+=ratio){
       audioBuf.push(input[Math.floor(i)]);
     }
+    // Questions WIN: while capturing a question, don't stream sound (the
+    // browser gives the mic to SpeechRecognition; we just drop these samples).
+    if(questionListening){ audioBuf = []; return; }
     // send ~0.5s at a time
     if(audioBuf.length >= TARGET_SR*0.5){
       const chunk = new Float32Array(audioBuf); audioBuf = [];
@@ -182,10 +186,10 @@ function setupWakeWord(){
     const said=ev.results[ev.results.length-1][0].transcript.trim().toLowerCase();
     const hit=WAKE_WORDS.some(w=>said.includes(w));
     if(wakeActive){ pendingQuestion=said; msg.textContent="“"+said+"”";
-      talkBtn.classList.remove('listening'); wakeActive=false; }
+      talkBtn.classList.remove('listening'); wakeActive=false; questionListening=false; }
     else if(hit){ let rest=said; WAKE_WORDS.forEach(w=>rest=rest.replace(w,"")); rest=rest.trim();
       if(rest.length>2){ pendingQuestion=rest; msg.textContent="“"+rest+"”"; }
-      else{ wakeActive=true; talkBtn.classList.add('listening');
+      else{ wakeActive=true; questionListening=true; talkBtn.classList.add('listening');
         msg.textContent="Listening… ask your question."; speak("Yes?"); } }
   };
   recog.onend=()=>{ if(streaming){ try{recog.start();}catch(e){} } };
@@ -195,12 +199,20 @@ function setupWakeWord(){
 talkBtn.addEventListener('click',()=>{
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ msg.textContent="Speech not supported on this browser."; return; }
+  // Questions win the mic: pause wake-word + sound streaming while we listen.
+  questionListening=true;
+  try{ if(recog) recog.stop(); }catch(e){}
   const one=new SR(); one.lang="en-US"; one.interimResults=false;
   talkBtn.classList.add('listening'); msg.textContent="Listening… ask your question.";
   one.onresult=(ev)=>{ const q=ev.results[0][0].transcript.trim();
     pendingQuestion=q; msg.textContent="“"+q+"”"; };
   one.onerror=()=>{ msg.textContent="Didn't catch that — try again."; };
-  one.onend=()=>talkBtn.classList.remove('listening');
+  one.onend=()=>{
+    talkBtn.classList.remove('listening');
+    questionListening=false;
+    // resume the wake-word listener
+    if(streaming){ try{ setupWakeWord(); }catch(e){} }
+  };
   one.start();
 });
 
