@@ -146,11 +146,12 @@ APPROACH_GROWTH_RATIO = 1.6
 # ...AND it must already occupy at least this fraction of the frame (so we don't
 # warn about a tiny thing far away that happens to be growing).
 APPROACH_MIN_AREA = 0.04
-# If ANY single box covers at least this fraction of the frame, the camera is
-# almost certainly OBSTRUCTED (a hand over the lens, pressed against something).
-# We treat that as "camera blocked", NOT "person approaching" - this is the fix
-# for the "caution! caution!" spam when a hand is in front of the camera.
-OBSTRUCTION_AREA = 0.70
+# If ANY single box covers at least this fraction of the frame AND stays that big
+# for OBSTRUCTION_MIN_FRAMES in a row, we treat the camera as OBSTRUCTED (a hand
+# over the lens). Raised high + persistence-gated so a normal close-up face at
+# desk distance does NOT constantly trip it.
+OBSTRUCTION_AREA = 0.82
+OBSTRUCTION_MIN_FRAMES = 5
 
 # --- 7b. Which objects are worth an instant danger warning ---
 # Only these labels trigger the INSTANT local "approaching" warning. (Everything
@@ -160,35 +161,40 @@ DANGER_OBJECTS = {
     "train", "dog", "skateboard",
 }
 
-# --- 7c. Steady-companion narration (the "warm constant voice") ---
-# BlindSpot has TWO voices blended into one experience:
-#   FAST (YOLO, local, instant) -> constant gentle narration, fills every moment
-#   SMART (VLM, remote, periodic) -> richer, warmer detail, on change or a timer
+# --- 7c. The VLM is the mind ---
+# Instead of Python deciding WHAT and WHEN to narrate, we simply OFFER the VLM a
+# frame periodically (or on change) and let IT decide: speak something new, or
+# reply NOTHING. Memory of recent outputs is passed so it never repeats.
 #
-# Enable the constant local narration (YOLO fast lane).
-NARRATION_ENABLED = True
-# Don't speak a fresh local narration more often than this (seconds). Keeps it a
-# calm companion, not a machine gun.
-NARRATION_MIN_INTERVAL_SECONDS = 3.5
-# Don't repeat the SAME idea within this many seconds (say-once memory). If the
-# scene doesn't change, we stay quiet instead of repeating "person ahead".
-SAY_ONCE_SECONDS = 12.0
-
-# --- 7d. Proactive VLM (the rich, warm updates) ---
-# Enable the VLM enrichment tick.
+# Enable the companion (proactive) behaviour at all.
 PROACTIVE_ENABLED = True
-# Fire the VLM for a rich update at most this often on the timer (seconds)...
-PROACTIVE_INTERVAL_SECONDS = 7.0
-# ...but ALSO fire it immediately when the scene meaningfully changes (a new
-# important object appears, or the area clearly changes), even before the timer.
+# How often we OFFER the VLM a frame in companion mode (seconds). The VLM still
+# often replies NOTHING, so this is an upper bound on how chatty it can be, not a
+# guarantee it speaks. Raise to make it calmer, lower to make it more talkative.
+PROACTIVE_INTERVAL_SECONDS = 6.0
+# Also offer a frame immediately when the scene meaningfully changes.
 PROACTIVE_ON_CHANGE = True
+# How many recent spoken lines to show the VLM so it doesn't repeat itself.
+MEMORY_LINES = 5
+# Don't repeat the SAME danger warning within this many seconds (the reflex has a
+# short memory too, so it warns once per approaching object, not every frame).
+SAY_ONCE_SECONDS = 8.0
 
-# --- 7e. Global VLM rate limit (protects the paid GPU) ---
-# Never fire the VLM more often than this, no matter the reason (except a direct
-# user question, which always goes through).
+# --- 7d. Global VLM rate limit (protects the paid GPU) ---
+# Never OFFER the VLM more often than this (a direct question always goes through).
 VLM_MIN_INTERVAL_SECONDS = 3.0
 
-# --- 7e. Optional sound boost (only used if audio/YAMNet is running) ---
+# --- 7e. Mode-by-voice ---
+# If the user's spoken input contains one of these, it's treated as setting a
+# STANDING INSTRUCTION (how they want BlindSpot to behave) rather than a one-off
+# question. Everything else is a normal question.
+MODE_PHRASES = {
+    "keep me company", "talk to me", "describe everything", "stop talking",
+    "be quiet", "only warn", "only tell me", "from now on", "keep talking",
+    "narrate", "don't talk", "less talking", "more detail",
+}
+
+# --- 7f. Optional sound boost (only used if audio/YAMNet is running) ---
 # If a danger object is approaching AND one of these sounds is heard, we treat it
 # as higher-confidence (the cross-modal sight+sound cue). Purely additive: audio
 # being off never breaks anything.

@@ -112,28 +112,43 @@ print("[space] model ready.", flush=True)
 # --------------------------------------------------------------------------
 # Prompt (mirror of blindspot/vlm.build_prompt so local + remote behave the same)
 # --------------------------------------------------------------------------
-def build_prompt(facts: str, sounds: str, question: str) -> str:
+def build_prompt(facts: str, sounds: str, question: str,
+                 instruction: str = "", recent: str = "") -> str:
+    """The VLM is the mind: it sees the image + hints, remembers what it recently
+    said (no repeats), follows the user's standing instruction, and decides for
+    itself whether to speak or stay silent."""
+    recent_items = [r.strip() for r in (recent or "").split("||") if r.strip()]
     lines = [
-        "You are BlindSpot, a warm, reassuring companion for a blind user.",
-        "You can see the camera image. Sensor hints (may be imperfect):",
-        f"  - Objects seen (vision): {facts or 'none'}.",
-        f"  - Sounds heard (audio): {sounds or 'none'}.",
-        "Speak naturally and kindly, like a friend walking beside them.",
-        "Describe only what you actually see; never invent details. If unsure, "
-        "say so gently.",
+        "You are BlindSpot, a warm, perceptive companion for a blind user. "
+        "You are their eyes: you see the camera image and help them feel oriented "
+        "and safe, like a trusted friend beside them.",
+        "Sensor hints (may be imperfect, trust your own eyes more):",
+        f"  - Objects (vision): {facts or 'none'}.",
+        f"  - Sounds (audio): {sounds or 'none'}.",
+        "Describe only what you genuinely see; never invent details.",
     ]
+    if instruction:
+        lines.append(f'The user has asked you to behave like this: "{instruction}" '
+                     "Honor that in how and how much you speak.")
+    if recent_items:
+        lines.append("You have RECENTLY said the following - do NOT repeat these "
+                     "ideas; only speak if you have something genuinely new, "
+                     "changed, or important to add:")
+        for r in recent_items[-5:]:
+            lines.append(f'   • "{r}"')
     if question:
-        lines.append(f'The user asked: "{question}"')
-        lines.append("Answer directly and helpfully using what you see. If they "
-                     "ask about text, read it exactly, word for word.")
+        lines.append(f'Right now the user asked: "{question}"')
+        lines.append("Answer directly and helpfully using what you see. "
+                     "If they ask about text, read it exactly, word for word.")
     else:
-        lines.append("No question was asked. Give a brief, friendly update about "
-                     "what's around them, and add a gentle safety note if "
-                     "anything could move or be a hazard. If nothing has "
-                     "meaningfully changed and there's nothing useful to add, "
-                     "reply with the single word NOTHING.")
-    lines.append("Reply with ONE short, natural spoken sentence. "
-                 "No preamble, no lists, under 25 words.")
+        lines.append("No question right now. You are in companion mode. If there is "
+                     "something new, changed, interesting, or a gentle safety note "
+                     "worth sharing, say it warmly. If the scene is essentially the "
+                     "same as what you already said and there is nothing new worth "
+                     "mentioning, reply with the single word NOTHING and stay quiet. "
+                     "It is good and kind to stay quiet when there's nothing new.")
+    lines.append("Reply with ONE short, natural spoken sentence (under 25 words), "
+                 "or exactly NOTHING. No preamble, no lists.")
     return "\n".join(lines)
 
 
@@ -148,14 +163,16 @@ def _decode_image(image_b64: str) -> Image.Image | None:
 
 
 @torch.inference_mode()
-def _run(image: Image.Image, facts: str, sounds: str, question: str) -> str:
+def _run(image, facts: str, sounds: str, question: str,
+         instruction: str = "", recent: str = "") -> str:
     if image is None:
         return "NOTHING"
     if not isinstance(image, Image.Image):
         image = Image.fromarray(image)
     image = image.convert("RGB")
 
-    prompt = build_prompt(facts or "", sounds or "", question or "")
+    prompt = build_prompt(facts or "", sounds or "", question or "",
+                          instruction or "", recent or "")
     messages = [{
         "role": "user",
         "content": [
@@ -178,8 +195,8 @@ def _run(image: Image.Image, facts: str, sounds: str, question: str) -> str:
 # --------------------------------------------------------------------------
 # 1) Gradio UI + Gradio API (manual testing in the browser)
 # --------------------------------------------------------------------------
-def describe_ui(image, facts, sounds, question):
-    return _run(image, facts, sounds, question)
+def describe_ui(image, facts, sounds, question, instruction="", recent=""):
+    return _run(image, facts, sounds, question, instruction, recent)
 
 
 with gr.Blocks(title="BlindSpot VLM") as demo:
@@ -194,11 +211,14 @@ with gr.Blocks(title="BlindSpot VLM") as demo:
             facts_in = gr.Textbox(label="Vision facts (YOLO)", value="")
             sounds_in = gr.Textbox(label="Audio facts (YAMNet)", value="")
             q_in = gr.Textbox(label="User question ('' = proactive)", value="")
+            instr_in = gr.Textbox(label="Standing instruction", value="")
+            recent_in = gr.Textbox(label="Recently said (|| separated)", value="")
             out = gr.Textbox(label="Answer")
             btn = gr.Button("Describe", variant="primary")
     # The laptop's gradio_client calls this exact endpoint (api_name="describe")
-    # with an uploaded image file via handle_file(). One clean endpoint.
-    btn.click(describe_ui, [img_in, facts_in, sounds_in, q_in], out,
+    # with 6 inputs: image, facts, sounds, question, instruction, recent.
+    btn.click(describe_ui,
+              [img_in, facts_in, sounds_in, q_in, instr_in, recent_in], out,
               api_name="describe")
 
 

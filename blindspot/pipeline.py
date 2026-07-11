@@ -66,9 +66,16 @@ class BlindSpot:
             except Exception as e:
                 print(f"[pipeline] push-to-talk OFF ({e}). No spoken questions.")
 
-        self._vlm_busy = threading.Lock()   # guards background (proactive/refine) calls
+        self._vlm_busy = threading.Lock()   # guards background (offer) calls
         self._question_busy = False          # True while a question is being answered
         self._recent_frames: list = []       # small ring buffer for frame selection
+        self._recent_said: list[str] = []    # memory of recent spoken lines (no-repeat)
+        self._instruction = ""               # user's standing "behave like this" wish
+
+    def _remember_said(self, text: str):
+        self._recent_said.append(text)
+        if len(self._recent_said) > config.MEMORY_LINES:
+            self._recent_said.pop(0)
 
     # -- frame selection: keep a few recent frames, pick the sharpest --
     def _remember_frame(self, frame):
@@ -114,13 +121,18 @@ class BlindSpot:
             self._question_busy = True
 
         self.flag.mark_vlm_fired()
+        # snapshot memory + instruction for this call
+        recent = list(self._recent_said)
+        instruction = self._instruction
 
         def work():
             try:
                 answer = self.brain.ask(frame, facts=facts, sounds=sounds,
-                                        question=question)
+                                        question=question,
+                                        instruction=instruction, recent=recent)
                 if not VLMBrain.is_silent(answer):
                     print(f"[brain/{tier}] {answer}")
+                    self._remember_said(answer)     # so the VLM won't repeat it
                     self.voice.say(answer, urgent=urgent)
             finally:
                 if is_question:
@@ -166,9 +178,16 @@ class BlindSpot:
                     if decision.tier != "silent":
                         print(f"[flag] {decision.tier}: {decision.reason}")
 
+                    # 🛠️ User set a standing instruction ("keep me company", etc.)
+                    if decision.tier == "set_mode" and decision.instruction:
+                        self._instruction = decision.instruction
+                        self._recent_said.clear()   # fresh start under new mode
+                        print(f"[mode] instruction set: {decision.instruction!r}")
+
                     # 🔴 Speak the instant local warning NOW (no VLM latency).
                     if decision.speak_now:
                         self.voice.say(decision.speak_now, urgent=decision.urgent)
+                        self._remember_said(decision.speak_now)
 
                     # Fire the brain if warranted (async, rate-limited).
                     # For a danger tier this is the SMART FOLLOW-UP after the
