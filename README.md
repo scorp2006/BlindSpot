@@ -1,175 +1,154 @@
 # BlindSpot 👁️‍🗨️
 
-**Real-time multimodal assistive system for the visually impaired.**
-Team **Odyssey** · Hack-The-Matrix · Track 04 (Multimodal AI)
+**A real-time, proactive, multimodal assistant for the visually impaired.**
+Team **Odyssey** · Hack-The-Matrix (TECHNIDHI'26) · Track 04 — Multimodal AI
 
-BlindSpot watches (camera) and listens (mic) *continuously*, and speaks only when
-something genuinely matters — so it doesn't overwhelm the user. Unlike "tap and
-ask" tools, it is **proactive**. Audio changes how the visual scene is
-interpreted (a car you *see* + an engine you *hear* + it's *close* = a warning; a
-car in silence = probably parked, stay quiet). That cross-modal interaction is
-the multimodal core.
-
-> **Who runs what:** the code is authored on one machine and run on the **RTX 3050
-> laptop**. The big VLM "brain" does **not** run on the laptop — it lives on a
-> rented Hugging Face GPU Space. The laptop runs the fast local models and calls
-> the Space only when triggered.
+BlindSpot continuously *watches* (camera) and *listens* (microphone), and speaks
+to the user through voice — but only when something genuinely matters, so it never
+overwhelms them. Unlike reactive "tap and ask" tools (e.g. Meta Ray-Ban), it is
+**proactive and continuous**: it narrates the world on scene change, warns
+instantly about obstacles/hazards while moving, answers spoken questions, and
+reads text aloud.
 
 ---
 
-## Architecture at a glance
+## ⚠️ IMPORTANT — read before you run (the VLM brain needs a GPU/cloud)
 
-```
- Camera + Mic (always on)
-        │
- FAST LOCAL MODELS (laptop, every frame)
-   • YOLOv8n   → objects + positions        (vision.py)
-   • YAMNet    → 521 sound classes          (audio.py)      [optional/Tier 3]
-   • Whisper   → your spoken questions       (listen.py)     [optional/Tier 3]
-        │
- FUSION / TRIGGER-SEVERITY LAYER            (fusion.py)
-   • hazard? (object + matching sound + close) → fire brain + warn
-   • question asked?                            → fire brain
-   • nothing important?                         → STAY SILENT
-        │
- VLM BRAIN (rented GPU, only when triggered) (vlm.py → vlm_space/)
-   • Qwen2.5-VL-7B: raw frame + vision facts + sound facts → one sentence
-        │
- TTS → VOICE (edge-tts neural)              (speech.py)
-```
+BlindSpot is a **two-part system by design**:
+
+| Part | Runs on | Handles |
+|------|---------|---------|
+| **Fast local models** | the user's laptop (a normal GPU laptop, e.g. RTX 3050 6 GB) | YOLO object detection, YAMNet sound, Whisper speech, all the decision logic, voice output |
+| **VLM "brain"** — **Qwen2.5-VL-7B** | a **cloud GPU / Hugging Face Space** (≈16 GB VRAM) | rich scene understanding, reading text, answering questions |
+
+> **The 7-billion-parameter VLM cannot run on a laptop or phone — it needs a GPU
+> with ~16 GB of VRAM.** This is intentional and standard (Apple Intelligence and
+> Meta's glasses do the same: light models on-device, heavy model in the cloud).
+>
+> **If you run this without deploying the VLM, the system is NOT broken** — the
+> local half (live detection, obstacle/hazard warnings, voice) still works. The
+> rich descriptions and question-answering simply won't appear until the VLM
+> endpoint is connected. By default the code ships in **`stub` mode**, which
+> returns placeholder brain answers so the whole pipeline runs with **zero GPU
+> cost** for evaluation.
+>
+> To see the *full* system, deploy the VLM (5 minutes, see below) and point the
+> app at it. We deploy it on a Hugging Face **GPU Space** — the exact code we use
+> is included in this repo under [`vlm_space/`](vlm_space/).
 
 ---
 
-## Project layout
+## How it works (architecture)
+
+```
+ Camera + Microphone  (continuous)
+        │
+ FAST LOCAL MODELS  (laptop, every frame — free, instant)
+   • YOLOv8m        → objects + positions + distance      (blindspot/vision.py)
+   • Tracker        → persistence + "is it approaching?"  (blindspot/tracker.py)
+   • Motion         → is the WEARER moving or still?       (blindspot/motion.py)
+   • YAMNet         → 521 environmental sound classes      (blindspot/audio.py)
+   • Whisper        → the user's spoken questions          (blindspot/listen.py)
+        │
+ DECISION / FUSION LAYER   (blindspot/flag.py)  ← the multimodal core
+   • Instant local SAFETY reflex (obstacle/hazard) — can't wait for the cloud
+   • Sound raises the severity of what's seen (cross-modal interaction)
+   • Offers a frame to the VLM only on real scene change (not every frame)
+   • Stays SILENT when nothing matters  ← the "don't overwhelm" feature
+        │
+ VLM BRAIN  (cloud GPU — only when triggered)   (blindspot/vlm.py → vlm_space/)
+   • Qwen2.5-VL-7B: raw frame + vision facts + sound facts + question
+   • Reasons across all inputs, reads text, replies in one spoken sentence
+        │
+ VOICE OUTPUT   (edge-tts neural on laptop, or the phone's own voice)
+```
+
+**Why this satisfies "2+ modalities that actively influence each other":** audio
+changes how vision is interpreted (a vehicle you *see* + an engine you *hear* +
+getting *closer* = a warning; the same vehicle in silence = parked, stay quiet),
+and both are passed together into the VLM, which reasons over image + text jointly.
+
+---
+
+## Repository layout
 
 ```
 BlindSpot/
-├── run.py                     # launcher: python run.py <tier>
-├── config.py                  # ALL settings live here (edit this, not the logic)
-├── requirements-core.txt      # Tiers 1 & 2  (install first)
-├── requirements-audio.txt     # Tier 3       (install second)
-├── blindspot/
-│   ├── camera.py              # camera / phone / video source
-│   ├── vision.py              # YOLOv8n detection + spatial phrasing
-│   ├── speech.py              # edge-tts neural voice (+ offline fallback)
-│   ├── narrator.py            # Tier 1 end-to-end demo
-│   ├── vlm.py                 # VLM client (stub / gradio / openai)
-│   ├── audio.py               # YAMNet sound classification  [Tier 3]
-│   ├── listen.py              # Whisper push-to-talk          [Tier 3]
-│   ├── fusion.py              # the multimodal decision engine[Tier 4]
-│   └── pipeline.py            # Tier 4 everything-fused
-└── vlm_space/                 # deploy this to a Hugging Face GPU Space
-    ├── app.py                 # Qwen2.5-VL-7B server
+├── README.md                  ← you are here
+├── SETUP.md                   ← step-by-step laptop setup
+├── run.py                     ← desktop launcher (webcam demo)
+├── config.py                  ← ALL tunables (models, thresholds, VLM endpoint)
+├── requirements-core.txt      ← Tiers 1 & 2 deps
+├── requirements-audio.txt     ← Tier 3 deps (TensorFlow/YAMNet, Whisper)
+├── blindspot/                 ← the local pipeline
+│   ├── camera.py  vision.py  tracker.py  motion.py
+│   ├── audio.py   listen.py  speech.py
+│   ├── flag.py    vlm.py     pipeline.py  narrator.py
+├── webapp/                    ← phone-as-camera web demo
+│   ├── server.py              ← FastAPI: phone → laptop pipeline → voice
+│   └── static/phone.html · dashboard.html
+└── vlm_space/                 ← the VLM brain (DEPLOY THIS TO A GPU/CLOUD)
+    ├── app.py                 ← Qwen2.5-VL-7B server (Gradio, HF-Space ready)
     ├── requirements.txt
-    └── README.md
+    └── README.md              ← click-by-click deploy guide
 ```
 
 ---
 
-## Setup (RTX 3050 laptop, Windows)
+## Running it
 
-### Step 1 — Python 3.11 + a virtual environment
-Use **Python 3.11** (or 3.10). **Not 3.13** — TensorFlow (YAMNet) has no wheels
-for it and Tier 3 will fail to install.
-
-```powershell
-# check you have 3.11
-py -3.11 --version
-
-# from the repo root:
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-```
-
-### Step 2 — Install CUDA PyTorch FIRST (so YOLO uses the GPU)
-Do this **before** the requirements files, otherwise you'll get CPU-only torch.
-
-```powershell
+### 1. Local pipeline (laptop)
+See **[SETUP.md](SETUP.md)** for the full, verified steps. Short version:
+```bash
+# Python 3.11 recommended
+python -m venv .venv && .venv\Scripts\activate      # (Windows)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# verify:
-python -c "import torch; print('CUDA ok:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-```
-You should see `CUDA ok: True NVIDIA GeForce RTX 3050`. If it says `False`, update
-your NVIDIA driver and retry. (It still runs on CPU, just slower.)
-
-### Step 3 — Core requirements (Tiers 1 & 2)
-```powershell
 pip install -r requirements-core.txt
+python run.py narrator          # webcam → detection → voice (works with no VLM)
 ```
 
-### Step 4 — Audio + speech-to-text (Tier 3, optional)
-Only when you're ready for the multimodal tier.
-```powershell
-pip install -r requirements-audio.txt
-# Whisper needs ffmpeg on PATH:
-winget install Gyan.FFmpeg
-# (restart the terminal so ffmpeg is on PATH)
+### 2. Phone demo (phone = camera/mic/speaker, laptop = brain)
+```bash
+pip install -r webapp/requirements-web.txt
+python -m webapp.server         # starts on :8000
+# then expose it and open on a phone:
+ngrok http 8000                 # open the https URL + /phone on the phone
+#                                 open the https URL + /dashboard on the laptop
 ```
 
----
-
-## Test it — MODULAR, one piece at a time 🧩
-
-Run these **in order**. Each one works on its own. Don't move on until the
-current one works.
-
-| # | Command | What it proves | Needs |
-|---|---------|----------------|-------|
-| 1 | `python -m blindspot.camera` | camera opens, live window | core |
-| 2 | `python -m blindspot.speech` | you hear the neural voice | core + internet |
-| 3 | `python -m blindspot.vision` | boxes drawn, scene printed | core |
-| 4 | `python run.py narrator` | **Tier 1 demo**: it narrates aloud | core |
-| 5 | `python -m blindspot.vlm` | VLM client works (stub = free) | core |
-| 6 | `python -m blindspot.audio` | prints sounds it hears | audio |
-| 7 | `python -m blindspot.listen` | hold SPACE, speak, see text | audio |
-| 8 | `python -m blindspot.fusion` | decision logic (no hardware) | none |
-| 9 | `python run.py full` | **everything fused** | all |
-
-Handy fallbacks for `full` if a module isn't installed yet:
-```powershell
-python run.py full --no-audio          # skip YAMNet
-python run.py full --no-audio --no-stt # vision + voice only
-python run.py full --no-window         # headless
+### 3. The VLM brain (required for full functionality)
+Deploy [`vlm_space/`](vlm_space/) to a Hugging Face **GPU Space** (or any GPU with
+~16 GB VRAM). Full instructions: **[vlm_space/README.md](vlm_space/README.md)**.
+Then point the app at it:
+```bash
+set BLINDSPOT_VLM=gradio
+set BLINDSPOT_VLM_SPACE=<your-username>/<your-space-name>
 ```
+Without this, `config.VLM_MODE` stays `stub` and the app runs locally with
+placeholder brain replies (nothing is broken — just no cloud reasoning).
 
 ---
 
-## Turning the VLM brain on (costs GPU money — do this last)
+## What works vs. what we claim (honest scope)
 
-By default `config.VLM_MODE = "stub"` → the pipeline runs **free** and returns
-canned brain answers, so you can build & test everything without a GPU.
+✅ Live object detection with position/distance, instant obstacle & approaching
+hazard warnings (only while the user is moving), motion awareness (moving vs.
+still), environmental sound awareness, spoken questions, text reading and rich
+scene descriptions via the VLM, a phone-as-sensor web demo, and a live dashboard.
 
-When you want the real brain:
-1. Deploy `vlm_space/` to a Hugging Face GPU Space (see `vlm_space/README.md`).
-2. On the laptop, point the client at it:
-   ```powershell
-   $env:BLINDSPOT_VLM = "gradio"
-   $env:BLINDSPOT_VLM_SPACE = "your-username/your-space-name"
-   ```
-3. Re-run `python -m blindspot.vlm` — you should get a *real* description.
-4. **Pause the Space** when done. It bills per hour while running.
+❌ Not a certified medical/mobility device, not street-safe for unsupervised real
+use, not running fully on-device. It is a **working proof-of-concept of
+continuous, proactive multimodal assistance.**
 
 ---
 
-## Common knobs (in `config.py`)
+## Models used (all pre-trained, no training from scratch)
 
-- `CAMERA_SOURCE` — `0` webcam, or `"http://<phone-ip>:8080/video"` for the phone
-  IP-Webcam app, or a `.mp4` path for repeatable tests.
-- `EDGE_VOICE` — try `en-US-AriaNeural`, `en-GB-SoniaNeural`, `en-US-GuyNeural`.
-- `SPEECH_COOLDOWN_SECONDS` — how long before it repeats a line.
-- `HAZARD_CLOSE_AREA` — how big a vehicle must look before it counts as "close".
-- `VLM_MIN_INTERVAL_SECONDS` — minimum gap between paid VLM calls.
-
-You can override most via environment variables too (see `config.py`).
-
----
-
-## Honest scope
-
-✅ Live narration, reading text / answering questions, reacting to sounds, in a
-controlled room. A working **proof-of-concept of continuous multimodal
-assistance**.
-
-❌ Not street-safe for real blind users, not flawless, not running on-device or
-on glasses. We don't claim it is.
+| Job | Model | Where |
+|-----|-------|-------|
+| Object detection | YOLOv8m | laptop |
+| Sound classification | YAMNet (521 classes) | laptop |
+| Speech-to-text | Whisper (base) | laptop |
+| Text-to-speech | edge-tts (neural) / browser voice | laptop / phone |
+| Vision-language reasoning | **Qwen2.5-VL-7B** | **cloud GPU** |
+```
