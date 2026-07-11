@@ -103,10 +103,20 @@ else:
         torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     )
 
-processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+# LATENCY: the image "prefill" (turning pixels into vision tokens) dominates
+# response time. Capping max_pixels caps how many vision tokens Qwen makes per
+# frame, which is the single biggest speedup. 768*768 keeps scene understanding
+# and normal-size text readable while cutting prefill a lot. Lower = faster but
+# weaker on small/distant text; raise toward 1280*720 if OCR needs it.
+_MIN_PIXELS = int(os.getenv("MIN_PIXELS", 256 * 256))
+_MAX_PIXELS = int(os.getenv("MAX_PIXELS", 768 * 768))
+processor = AutoProcessor.from_pretrained(
+    MODEL_ID, trust_remote_code=True,
+    min_pixels=_MIN_PIXELS, max_pixels=_MAX_PIXELS,
+)
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(MODEL_ID, **_load_kwargs)
 model.eval()
-print("[space] model ready.", flush=True)
+print(f"[space] model ready. (max_pixels={_MAX_PIXELS})", flush=True)
 
 
 # --------------------------------------------------------------------------
@@ -197,7 +207,8 @@ def _run(image, facts: str, sounds: str, question: str,
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
-    generated = model.generate(**inputs, max_new_tokens=96, do_sample=False)
+    # We only ever want <25 words; 64 tokens is plenty and decodes faster.
+    generated = model.generate(**inputs, max_new_tokens=64, do_sample=False)
     trimmed = generated[:, inputs.input_ids.shape[1]:]
     answer = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True
