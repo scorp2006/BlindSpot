@@ -277,11 +277,24 @@ def stop():
 
 @app.post("/start")
 def start():
-    """Resume a stopped session."""
+    """Start a FRESH session (also called by the phone's Start button).
+
+    Resets everything session-scoped - frame count, spoken memory, standing
+    instruction, and the flag engine's scene state - so a new phone (or the
+    same one) gets a clean companion, not the ghost of the last session.
+    This is what lets phone B join after phone A pressed End."""
+    global flag
+    flag = FlagEngine()
+    _recent_said.clear()
+    _instruction["text"] = ""
+    _pending_speech.clear()
+    _frames_buf.clear()
     with _state_lock:
-        _latest["running"] = True
-        _latest["tier"] = "silent"
-        _latest["reason"] = "running"
+        _latest.update({
+            "running": True, "tier": "silent", "reason": "running",
+            "frames": 0, "spoken": "", "vlm_log": [], "objects": [],
+            "sounds": "", "last_frame_ts": 0.0, "phone_connected": False,
+        })
     return {"ok": True}
 
 
@@ -297,14 +310,19 @@ def state():
 
 
 # --- static pages ---
+# no-store: phones aggressively cache pages from the same ngrok URL; without
+# this, users keep seeing the OLD page after we ship changes.
+_NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @app.get("/phone", response_class=HTMLResponse)
 def phone_page():
-    return FileResponse(os.path.join(_STATIC, "phone.html"))
+    return FileResponse(os.path.join(_STATIC, "phone.html"), headers=_NO_CACHE)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_page():
-    return FileResponse(os.path.join(_STATIC, "dashboard.html"))
+    return FileResponse(os.path.join(_STATIC, "dashboard.html"), headers=_NO_CACHE)
 
 
 @app.get("/")

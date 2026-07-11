@@ -136,9 +136,11 @@ async function tick(){
   setTimeout(tick,FRAME_EVERY_MS);
 }
 
+let wakeSuspended=false;   // true while tap-to-talk owns the mic
 function setupWakeWord(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ msg.textContent="Wake word unavailable — use the mic button."; return; }
+  if(recog){ try{ recog.start(); }catch(e){} return; }  // ONE recognizer, ever
   recog=new SR(); recog.continuous=true; recog.interimResults=false; recog.lang="en-US";
   recog.onresult=(ev)=>{
     const said=ev.results[ev.results.length-1][0].transcript.trim().toLowerCase();
@@ -150,15 +152,18 @@ function setupWakeWord(){
       else{ wakeActive=true; questionListening=true; talkBtn.classList.add('listening');
         msg.textContent="Listening… ask your question."; speak("Yes?"); } }
   };
-  recog.onend=()=>{ if(streaming){ try{recog.start();}catch(e){} } };
+  // Auto-restart ONLY when not suspended - while tap-to-talk owns the mic the
+  // wake recognizer must stay quiet, or the two fight and questions lag.
+  recog.onend=()=>{ if(streaming && !wakeSuspended){ try{recog.start();}catch(e){} } };
   try{ recog.start(); }catch(e){}
 }
 
 talkBtn.addEventListener('click',()=>{
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ msg.textContent="Speech not supported on this browser."; return; }
-  // Questions win the mic: pause wake-word + sound streaming while we listen.
-  questionListening=true;
+  // Questions win the mic: SUSPEND the wake recognizer (never create a second
+  // one - accumulating recognizers is what made questions slower and slower).
+  wakeSuspended=true; questionListening=true;
   try{ if(recog) recog.stop(); }catch(e){}
   const one=new SR(); one.lang="en-US"; one.interimResults=false;
   talkBtn.classList.add('listening'); msg.textContent="Listening… ask your question.";
@@ -168,14 +173,18 @@ talkBtn.addEventListener('click',()=>{
   one.onend=()=>{
     talkBtn.classList.remove('listening');
     questionListening=false;
-    // resume the wake-word listener
-    if(streaming){ try{ setupWakeWord(); }catch(e){} }
+    // resume the SAME wake recognizer
+    wakeSuspended=false;
+    if(streaming && recog){ try{ recog.start(); }catch(e){} }
   };
   one.start();
 });
 
 startBtn.addEventListener('click',async()=>{
   try{
+    // Tell the server to begin a FRESH session (also un-does a previous End -
+    // without this, a phone joining after another phone ended stays frozen).
+    try{ await fetch(SERVER+"/start",{method:"POST"}); }catch(e){}
     await startCamera();
     streaming=true;
     startBtn.style.display="none";

@@ -193,9 +193,13 @@ class FlagEngine:
         offer = (config.PROACTIVE_ENABLED
                  and (timer_due or (config.PROACTIVE_ON_CHANGE and changed))
                  and self._vlm_allowed())
-        if scene_key:
-            self._last_scene_key = scene_key
+        # CRITICAL: only commit the new scene key when the offer actually fires.
+        # If the change arrived while the VLM was rate-limited/busy, the change
+        # stays PENDING and fires as soon as the VLM is allowed again. (The old
+        # code overwrote the key unconditionally - a change that landed in the
+        # 5s cooldown window was swallowed forever and the companion went mute.)
         if offer:
+            self._last_scene_key = scene_key
             self._last_offer = now
 
         # Combine: speak the safety note NOW (if any) AND still let the VLM

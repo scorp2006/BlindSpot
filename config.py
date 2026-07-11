@@ -173,7 +173,11 @@ DANGER_OBJECTS = {
 # things that are genuinely VERY close and directly ahead (a real trip risk) -
 # not a laptop sitting on the desk in front of you. The VLM describes everything
 # else; this reflex is just the instant "watch out" a human friend gives once.
-OBSTACLE_MIN_AREA = 0.22          # must be quite large (very close) to warn
+# 0.15 ~= the object fills 15% of the view: roughly 1-1.5m from a chair-sized
+# object. Early enough to stop before hitting it, big enough not to nag about
+# furniture across the room. (0.22 was too late - a chair you were walking
+# into never triggered; 0.06 was too eager - the desk laptop nagged.)
+OBSTACLE_MIN_AREA = 0.15
 OBSTACLE_PATH_FRACTION = 0.50     # center 50% of width = "in your path"
 # Never repeat the same obstacle warning within this many seconds.
 OBSTACLE_SAY_ONCE_SECONDS = 15.0
