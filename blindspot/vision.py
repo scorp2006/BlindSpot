@@ -77,7 +77,7 @@ class VisionModel:
     def __init__(self, model_path=None, conf=None, device=None):
         # Import here (not at top) so importing this module is cheap and other
         # tiers don't pay the ultralytics import cost unless they detect.
-        from ultralytics import YOLO
+        from ultralytics import YOLO, RTDETR
         import torch
 
         self.conf = config.YOLO_CONFIDENCE if conf is None else conf
@@ -87,8 +87,12 @@ class VisionModel:
             dev = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.device = dev
 
-        self.model = YOLO(model_path or config.YOLO_MODEL)
-        print(f"[vision] YOLO loaded on device: {self.device}")
+        model_name = model_path or config.YOLO_MODEL
+        if "rtdetr" in model_name.lower():
+            self.model = RTDETR(model_name)
+        else:
+            self.model = YOLO(model_name)
+        print(f"[vision] Model {model_name} loaded on device: {self.device}")
 
     def detect(self, frame) -> list[Detection]:
         h, w = frame.shape[:2]

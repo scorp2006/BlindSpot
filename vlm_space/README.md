@@ -1,71 +1,119 @@
 # BlindSpot VLM Space — deploy the "brain" (Qwen2.5-VL-7B)
 
-This folder is the **remote GPU half** of BlindSpot. It does **not** run on the
-laptop. It runs on a rented Hugging Face **GPU Space**. The laptop talks to it
-over the internet via `blindspot/vlm.py` in `gradio` mode.
+This folder is the **remote GPU half** of BlindSpot. It runs on a Hugging Face
+**GPU Space**, not on the laptop. The laptop calls it over the internet.
 
-> 💡 You do **not** need this to build or demo Tiers 1 and 3. Keep the laptop in
-> `VLM_MODE=stub` until you're ready to spend GPU money. Deploy this only when
-> you want the real point-and-ask / reasoning brain (Tier 2), and ideally just
-> for final testing + the demo to keep cost at the ~$10–25 the plan budgets.
+The Space exposes **two ways in** (same model, same URL):
+1. **`POST /api/describe`** — the primary path the laptop uses (robust HTTP/JSON).
+2. **A Gradio UI** — for you to test manually in the browser.
 
 ---
 
-## Option A — Hugging Face Space (recommended, matches the code)
+## 1. Create the Space
 
-1. Go to https://huggingface.co/new-space
-2. **Space SDK:** `Gradio`. **Space hardware:** pick a **GPU** tier.
-   - `T4 small` (16 GB) works **with 4-bit** — set variable `LOAD_4BIT=1`.
-   - `A10G` / `A100` runs full precision comfortably — leave `LOAD_4BIT` unset.
-3. Upload the two files from this folder: `app.py` and `requirements.txt`.
-4. (Optional, private Space) In **Settings → Variables and secrets**, you can
-   add a token; the laptop passes `BLINDSPOT_VLM_KEY` as the HF token.
-5. First boot is **slow** (it downloads ~16 GB of weights). Watch the logs until
-   you see `[space] model ready.`
-6. Test it right in the Space UI: upload any photo, click **Describe**.
+1. https://huggingface.co/new-space
+2. **Space name:** `blindspot-vlm` · **SDK:** `Gradio` · **Visibility:** `Public`
+3. **Hardware:** choose a GPU:
+   - **L4 (24 GB)** — ✅ recommended. Runs full precision (~17 GB). Leave
+     `LOAD_4BIT` unset. (The "30 GB" is system RAM — plenty.)
+   - A10G (24 GB) — also great, full precision.
+   - T4 small (16 GB) — works, but you MUST add variable `LOAD_4BIT=1` (4-bit).
 
-### Point the laptop at it
-On the laptop, set these (either edit `config.py` or use env vars):
+## 2. Upload the files
 
-```powershell
-$env:BLINDSPOT_VLM = "gradio"
-$env:BLINDSPOT_VLM_SPACE = "your-username/your-space-name"
-# only if the Space is private:
-$env:BLINDSPOT_VLM_KEY = "hf_xxx_your_token"
+Upload both files from this folder to the Space (Files tab, or git push):
+- `app.py`
+- `requirements.txt`
+
+## 3. (T4 only) set the 4-bit variable
+
+Only if you picked a 16 GB T4: Space → **Settings → Variables and secrets** →
+add variable `LOAD_4BIT` = `1`. **Skip this on L4/A10G.**
+
+## 4. Wait for boot
+
+Watch the **Logs** tab. First boot downloads ~16 GB of weights (5–15 min). Ready
+when you see:
+```
+[space] model ready.
 ```
 
-Then `python -m blindspot.vlm` on the laptop should return a real description
-instead of a `(stub)` one.
+## 5. Test it (two quick checks)
+
+**A. Health check** — open in a browser:
+```
+https://<your-space>.hf.space/api/health
+```
+Should return `{"status":"ok", ...}`.
+
+**B. Manual describe** — the Gradio UI at `https://<your-space>.hf.space/`:
+upload a photo of a sign, type `what does this say?`, click **Describe**. A
+sensible sentence back = the brain works. ✅
 
 ---
 
-## Option B — Any OpenAI-compatible endpoint (RunPod / vLLM / LM Studio)
+## 6. Connect the laptop (your friend changes NO code)
 
-If you'd rather rent a raw GPU and serve with vLLM:
+Give your friend **one value**: the Space URL, e.g.
+`https://your-username-blindspot-vlm.hf.space`
 
+He sets two environment variables and runs:
+```powershell
+$env:BLINDSPOT_VLM = "http"
+$env:BLINDSPOT_VLM_URL_HTTP = "https://your-username-blindspot-vlm.hf.space"
+python -m blindspot.vlm      # should now print a REAL answer, not "(stub)"
+```
+(Public Space → **no token needed**. If you ever make it Private, also set
+`$env:BLINDSPOT_VLM_KEY = "hf_xxx"`.)
+
+Then the whole system uses the brain automatically:
+```powershell
+python run.py full
+```
+
+---
+
+## The HTTP contract (for debugging)
+
+```
+POST https://<your-space>.hf.space/api/describe
+Content-Type: application/json
+{
+  "image":    "<base64 JPEG or PNG>",      # required
+  "facts":    "person(close, ahead, 0.9)", # optional YOLO hints
+  "sounds":   "engine(0.4)",               # optional audio hints
+  "question": "what does this sign say?"    # "" = proactive mode
+}
+-> { "answer": "The sign says Exit, to your right." }
+```
+Test from anywhere:
+```bash
+curl -X POST https://<your-space>.hf.space/api/health
+```
+
+---
+
+## Cost control (hackathon budget)
+
+- The VLM is only called **when triggered** (a question, an approaching hazard, or
+  a throttled proactive tick) and never more often than
+  `config.VLM_MIN_INTERVAL_SECONDS`. Even in the demo you fire it a handful of
+  times, not continuously.
+- **Pause the Space** (Settings → Pause) the moment you stop testing — GPU Spaces
+  bill per hour while running.
+- Develop everything else in `stub` mode (free); flip to `http` only to verify
+  and to demo.
+
+---
+
+## Alternative: OpenAI-compatible server (RunPod / vLLM)
+
+If you rent a raw GPU instead:
 ```bash
 vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8000
 ```
-
-Then on the laptop:
-
 ```powershell
 $env:BLINDSPOT_VLM = "openai"
 $env:BLINDSPOT_VLM_URL = "http://YOUR_GPU_IP:8000/v1/chat/completions"
-$env:BLINDSPOT_VLM_KEY = ""   # or your key if the server requires one
 ```
-
-The client (`_OpenAIBackend`) sends the frame as a base64 data URL — standard
-OpenAI vision format — so no code changes are needed.
-
----
-
-## Cost control (important for a hackathon budget)
-
-- The VLM is only invoked **when triggered** (a question or a fused hazard), and
-  never more often than `config.VLM_MIN_INTERVAL_SECONDS`. So even during the
-  demo, you fire it a handful of times, not continuously.
-- **Pause / stop the Space** the moment you're done testing. GPU Spaces bill by
-  the hour while running.
-- Do all pipeline development in `stub` mode (free), flip to `gradio` only to
-  verify and to demo.
+No code changes — the client sends the frame as an OpenAI vision data URL.

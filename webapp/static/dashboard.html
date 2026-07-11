@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BlindSpot · Console</title>
+<style>
+  :root {
+    --bg:#0b0d12; --bg2:#0e1016; --panel:#14161d; --panel2:#171a22;
+    --line:#232733; --line2:#2c313d;
+    --text:#e7e9ee; --muted:#8b93a7; --faint:#5b6478;
+    --accent:#7c5cff; --accent-dim:#4b3d99;
+    --green:#34d399; --amber:#fbbf24; --red:#f87171; --blue:#60a5fa; --violet:#c084fc;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:var(--bg); color:var(--text); font-family:var(--sans);
+    font-size:14px; -webkit-font-smoothing:antialiased;
+    display:grid; grid-template-columns:220px 1fr; grid-template-rows:56px 1fr;
+    grid-template-areas:"rail top" "rail main"; height:100vh; overflow:hidden;
+  }
+
+  /* left rail */
+  .rail { grid-area:rail; background:var(--bg2); border-right:1px solid var(--line);
+    padding:16px 14px; display:flex; flex-direction:column; gap:6px; }
+  .brand { display:flex; align-items:center; padding:6px 8px 18px; }
+  .brand .name { font-weight:700; font-size:19px; letter-spacing:-0.4px; color:var(--text); }
+  .brand .accentword { color:var(--accent); }
+  .navlabel { color:var(--faint); font-size:10.5px; letter-spacing:1.4px;
+    text-transform:uppercase; padding:14px 8px 6px; font-family:var(--mono); }
+  .nav { display:flex; align-items:center; gap:9px; padding:8px 10px;
+    border-radius:8px; color:var(--muted); font-size:13.5px; }
+  .nav.active { background:var(--panel); color:var(--text);
+    box-shadow:inset 0 0 0 1px var(--line2); }
+  .nav .ic { width:15px; opacity:0.8; }
+  .rail .spacer { flex:1; }
+  .stat { font-family:var(--mono); font-size:11px; color:var(--faint);
+    padding:6px 8px; border-top:1px solid var(--line); }
+
+  /* top bar */
+  .top { grid-area:top; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; padding:0 22px;
+    background:var(--bg2); }
+  .top h1 { font-size:15px; font-weight:600; margin:0; letter-spacing:0.2px; }
+  .top .crumb { color:var(--faint); font-family:var(--mono); font-size:12px; }
+  .conn { display:flex; align-items:center; gap:8px; font-size:12.5px;
+    color:var(--muted); font-family:var(--mono); padding:5px 11px;
+    border:1px solid var(--line); border-radius:7px; }
+  .conn .dot { width:7px; height:7px; border-radius:50%; background:var(--faint); }
+  .conn.live { color:var(--green); border-color:#1e3a2f; }
+  .conn.live .dot { background:var(--green); box-shadow:0 0 8px var(--green); }
+
+  /* main scroll area */
+  .main { grid-area:main; overflow:auto; padding:20px 22px 40px; }
+  .maxw { max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+
+  /* pipeline strip */
+  .flow { display:grid; grid-template-columns:repeat(9,auto); align-items:center;
+    gap:0; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:14px 18px; overflow-x:auto; }
+  .node { display:flex; flex-direction:column; align-items:center; gap:6px;
+    min-width:96px; }
+  .node .chip { width:38px; height:38px; border-radius:10px; display:grid;
+    place-items:center; font-size:17px; background:var(--panel2);
+    border:1px solid var(--line2); transition:.18s; }
+  .node.on .chip { border-color:var(--accent); background:#1b1730;
+    box-shadow:0 0 0 1px var(--accent), 0 0 16px -4px var(--accent); }
+  .node .lbl { font-size:11px; color:var(--muted); }
+  .node .sub { font-size:9.5px; color:var(--faint); font-family:var(--mono);
+    letter-spacing:0.5px; text-transform:uppercase; }
+  .arrow { color:var(--line2); font-size:14px; padding:0 4px; margin-bottom:16px; }
+
+  /* grid */
+  .cols { display:grid; grid-template-columns:1.35fr 1fr; gap:16px; }
+  @media (max-width:900px){ .cols{ grid-template-columns:1fr; } body{ grid-template-columns:0 1fr;} .rail{display:none;} }
+  .col { display:flex; flex-direction:column; gap:16px; }
+
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; }
+  .card h2 { margin:0 0 12px; font-size:11px; letter-spacing:1.3px;
+    text-transform:uppercase; color:var(--muted); font-weight:600;
+    font-family:var(--mono); display:flex; align-items:center; gap:8px; }
+
+  /* decision hero */
+  .decision { display:flex; align-items:baseline; gap:14px; }
+  .tier { font-size:34px; font-weight:750; letter-spacing:0.3px; line-height:1; }
+  .badge { font-family:var(--mono); font-size:10.5px; padding:4px 9px;
+    border-radius:6px; border:1px solid var(--line2); color:var(--muted);
+    text-transform:uppercase; letter-spacing:1px; }
+  .reason { color:var(--muted); font-size:13px; margin-top:10px; font-family:var(--mono); }
+  .t-silent{color:var(--faint)} .t-narrate{color:var(--green)}
+  .t-proactive{color:var(--violet)} .t-question{color:var(--blue)}
+  .t-danger{color:var(--red)} .t-obstructed{color:var(--amber)}
+
+  .spoken { font-size:19px; line-height:1.45; min-height:54px; text-wrap:pretty; }
+  .spoken.empty { color:var(--faint); font-size:14px; }
+
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:9px 4px; border-bottom:1px solid var(--line);
+    font-size:13px; }
+  th { color:var(--faint); font-weight:600; font-size:10.5px; font-family:var(--mono);
+    text-transform:uppercase; letter-spacing:0.8px; }
+  td { font-variant-numeric:tabular-nums; }
+  td.obj { font-weight:550; }
+  .chipv { display:inline-block; font-family:var(--mono); font-size:11px;
+    padding:2px 7px; border-radius:5px; background:var(--panel2);
+    border:1px solid var(--line2); color:var(--muted); }
+  .conf { font-family:var(--mono); color:var(--muted); }
+
+  .log { font-family:var(--mono); font-size:12.5px; max-height:230px; overflow:auto;
+    display:flex; flex-direction:column; gap:0; }
+  .log .row { padding:8px 0; border-bottom:1px dashed var(--line); color:var(--muted);
+    display:flex; gap:9px; align-items:flex-start; }
+  .log .row .tg { color:var(--violet); flex:none; }
+  .empty-note { color:var(--faint); font-family:var(--mono); font-size:12.5px; }
+
+  .sounds { font-family:var(--mono); font-size:13px; color:var(--text); }
+  .sounds .q { color:var(--faint); }
+
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+  <!-- left rail -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="name">Blind<span class="accentword">Spot</span></div>
+    </div>
+    <div class="nav active"><span class="ic">▦</span> Live Console</div>
+    <div class="nav"><span class="ic">◷</span> Session</div>
+    <div class="navlabel">Pipeline</div>
+    <div class="nav"><span class="ic">▤</span> Vision · YOLO</div>
+    <div class="nav"><span class="ic">◍</span> Audio · YAMNet</div>
+    <div class="nav"><span class="ic">✦</span> Brain · VLM</div>
+    <div class="spacer"></div>
+    <div class="stat" id="stat-mode">vlm · —</div>
+    <div class="stat" id="stat-fps">frames · 0</div>
+    <div class="stat" id="stat-motion">user · —</div>
+  </aside>
+
+  <!-- top bar -->
+  <header class="top">
+    <div>
+      <h1>Live Console</h1>
+      <span class="crumb">workspace / blindspot / realtime</span>
+    </div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">connecting</span></div>
+  </header>
+
+  <!-- main -->
+  <main class="main">
+    <div class="maxw">
+
+      <!-- pipeline -->
+      <div class="flow">
+        <div class="node on" id="n-cam"><div class="chip">📷</div><div class="lbl">Phone</div><div class="sub">camera·mic</div></div>
+        <div class="arrow">→</div>
+        <div class="node" id="n-yolo"><div class="chip">▦</div><div class="lbl">Detect</div><div class="sub">yolo·local</div></div>
+        <div class="arrow">→</div>
+        <div class="node" id="n-flag"><div class="chip">◈</div><div class="lbl">Decide</div><div class="sub">fusion</div></div>
+        <div class="arrow">→</div>
+        <div class="node" id="n-vlm"><div class="chip">✦</div><div class="lbl">Reason</div><div class="sub">vlm·cloud</div></div>
+        <div class="arrow">→</div>
+        <div class="node" id="n-voice"><div class="chip">🔊</div><div class="lbl">Speak</div><div class="sub">voice</div></div>
+      </div>
+
+      <div class="cols">
+        <!-- left -->
+        <div class="col">
+          <div class="card">
+            <h2>Current decision</h2>
+            <div class="decision">
+              <span class="tier t-silent" id="tier">IDLE</span>
+              <span class="badge" id="badge">awaiting phone</span>
+            </div>
+            <div class="reason" id="reason">Open the phone page and tap Start.</div>
+          </div>
+
+          <div class="card">
+            <h2>🔊 Spoken to user</h2>
+            <div class="spoken empty" id="spoken">Nothing spoken yet.</div>
+          </div>
+
+          <div class="card">
+            <h2>✦ VLM brain · recent</h2>
+            <div class="log" id="vlmlog"><span class="empty-note">no brain calls yet — fires on questions, changes, or hazards</span></div>
+          </div>
+        </div>
+
+        <!-- right -->
+        <div class="col">
+          <div class="card">
+            <h2>👁 Objects detected</h2>
+            <table>
+              <thead><tr><th>Object</th><th>Distance</th><th>Side</th><th>Conf</th></tr></thead>
+              <tbody id="objs"><tr><td colspan="4" class="empty-note">scene empty</td></tr></tbody>
+            </table>
+          </div>
+
+          <div class="card">
+            <h2>👂 Sounds heard</h2>
+            <div class="sounds" id="sounds"><span class="q">quiet</span></div>
+          </div>
+
+          <div class="card">
+            <h2>◷ Session</h2>
+            <table>
+              <tbody>
+                <tr><td class="obj">Objects tracked</td><td style="text-align:right" id="m-objs">0</td></tr>
+                <tr><td class="obj">Frames processed</td><td style="text-align:right" id="m-frames">0</td></tr>
+                <tr><td class="obj">VLM calls</td><td style="text-align:right" id="m-vlm">0</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+const POLL_MS = 250;
+const $ = id => document.getElementById(id);
+let frames = 0, vlmCalls = 0, lastLogLen = 0, seenSpoken = "";
+
+function on(id, v){ $(id).classList.toggle('on', !!v); }
+
+async function poll(){
+  try{
+    const s = await (await fetch("/state")).json();
+    $("stat-mode").textContent = "vlm · " + (s.vlm_mode || (window.__mode||"?"));
+
+    const t = s.tier || "silent";
+    const tierEl = $("tier");
+    tierEl.textContent = t.toUpperCase();
+    tierEl.className = "tier t-" + t;
+    $("badge").textContent = t === "silent" ? "monitoring" : t;
+    $("reason").textContent = s.reason || "";
+
+    // spoken
+    const sp = $("spoken");
+    if (s.spoken){ sp.textContent = s.spoken; sp.classList.remove("empty"); }
+
+    // objects
+    const tb = $("objs");
+    if (s.objects && s.objects.length){
+      tb.innerHTML = s.objects.map(o =>
+        `<tr><td class="obj">${o.label}</td>
+             <td><span class="chipv">${o.distance}</span></td>
+             <td><span class="chipv">${o.side}</span></td>
+             <td class="conf">${(o.conf*100).toFixed(0)}%</td></tr>`).join("");
+    } else {
+      tb.innerHTML = `<tr><td colspan="4" class="empty-note">scene empty</td></tr>`;
+    }
+
+    // sounds
+    $("sounds").innerHTML = s.sounds ? s.sounds : '<span class="q">quiet</span>';
+
+    // vlm log
+    if (s.vlm_log && s.vlm_log.length){
+      if (s.vlm_log.length !== lastLogLen){ vlmCalls++; lastLogLen = s.vlm_log.length; }
+      $("vlmlog").innerHTML = s.vlm_log.map(l => {
+        const m = l.match(/^\[(.+?)\]\s*(.*)$/);
+        const tag = m ? m[1] : "vlm", txt = m ? m[2] : l;
+        return `<div class="row"><span class="tg">${tag}</span><span>${txt}</span></div>`;
+      }).join("");
+    }
+
+    // connection reflects the PHONE, not just the server
+    const phone = !!s.phone_connected;
+    $("conn").className = phone ? "conn live" : "conn";
+    $("connText").textContent = s.running===false ? "session ended"
+                              : (phone ? "phone live" : "phone disconnected");
+
+    // pipeline lights (only when the phone is actually feeding frames)
+    on('n-cam', phone);
+    on('n-yolo', phone && (s.objects||[]).length>0);
+    on('n-flag', phone && t!=="silent" && t!=="stopped");
+    on('n-vlm', phone && ["offer","question","danger"].includes(t));
+    on('n-voice', phone && !!s.spoken && t!=="silent");
+
+    // metrics - REAL phone frames from the server (not dashboard polls)
+    $("m-objs").textContent = (s.objects||[]).length;
+    $("m-frames").textContent = s.frames || 0;
+    $("m-vlm").textContent = vlmCalls;
+    $("stat-fps").textContent = "frames · " + (s.frames || 0);
+    $("stat-motion").textContent = "user · " + (phone ? (s.moving ? "moving" : "still") : "—");
+  }catch(e){
+    $("conn").className = "conn"; $("connText").textContent = "waiting for server";
+  }
+  setTimeout(poll, POLL_MS);
+}
+poll();
+</script>
+</body>
+</html>

@@ -32,14 +32,22 @@ TARGET_FPS = 15
 
 
 # ---------------------------------------------------------------------------
-# 2. VISION (YOLOv8n)
+# 2. VISION (YOLO)
 # ---------------------------------------------------------------------------
-# nano = smallest/fastest, perfect for a 6 GB card. Ultralytics auto-downloads
-# the weights on first run to the working dir.
-YOLO_MODEL = "yolov8n.pt"
+# Model options (all auto-download on first run):
+#   yolov8n.pt  ~6 MB   fastest, least accurate  (nano)
+#   yolov8s.pt  ~22 MB  fast, good accuracy      (small)
+#   yolov8m.pt  ~50 MB  best balance for 6 GB    (medium)  <-- default
+#   rtdetr-x.pt ~260 MB most accurate BUT ~5-6 GB VRAM, slow on a 3050, and
+#                       still only the same 80 COCO classes. Not recommended here.
+#
+# IMPORTANT: a bigger detector does NOT recognize *new* kinds of objects - every
+# YOLO/RT-DETR model knows the same 80 COCO classes. "Recognize anything" is the
+# VLM's job, not YOLO's. YOLO is just the fast, cheap "something is there" layer.
+YOLO_MODEL = os.getenv("BLINDSPOT_YOLO", "yolov8m.pt")
 
-# Ignore detections below this confidence (0-1). 0.45 keeps it from narrating junk.
-YOLO_CONFIDENCE = 0.45
+# Ignore detections below this confidence (0-1). 0.50 is a good middle ground.
+YOLO_CONFIDENCE = 0.50
 
 # Run YOLO on GPU if available, else CPU. "cuda:0" or "cpu" or "auto".
 YOLO_DEVICE = os.getenv("BLINDSPOT_DEVICE", "auto")
@@ -66,16 +74,23 @@ SPEECH_COOLDOWN_SECONDS = 4.0
 # ---------------------------------------------------------------------------
 # "stub"   -> no network at all; returns a fake canned answer. Use this to test
 #             the whole pipeline WITHOUT spending GPU money. START HERE.
-# "gradio" -> talk to a Hugging Face Gradio Space (see vlm/hf_space/).
+# "gradio" -> talk to the Hugging Face Space via gradio_client. RECOMMENDED for
+#             the real brain (works reliably on HF Spaces).
+# "http"   -> POST to a custom /api/describe route (only if you self-host a server
+#             that exposes one; the HF Gradio Space does NOT).
 # "openai" -> talk to any OpenAI-compatible /chat/completions endpoint
 #             (vLLM, LM Studio, Ollama, cloud APIs).
 VLM_MODE = os.getenv("BLINDSPOT_VLM", "stub")
 
 # For VLM_MODE="gradio": the Space id ("user/space-name") or full URL.
+#   e.g. "scorp2111/blindspot-vlm"
 VLM_GRADIO_SPACE = os.getenv("BLINDSPOT_VLM_SPACE", "your-username/blindspot-vlm")
-# The named API endpoint exposed by the Space (see hf_space/app.py). Leave as is
-# unless you rename it in the Space.
+# The named API endpoint exposed by the Space (see vlm_space/app.py).
 VLM_GRADIO_API_NAME = "/describe"
+
+# For VLM_MODE="http" only (custom self-hosted server, not the HF Space).
+VLM_HTTP_URL = os.getenv("BLINDSPOT_VLM_URL_HTTP",
+                         "https://your-username-blindspot-vlm.hf.space")
 
 # For VLM_MODE="openai":
 VLM_OPENAI_URL = os.getenv("BLINDSPOT_VLM_URL", "http://localhost:8000/v1/chat/completions")
@@ -110,23 +125,122 @@ PUSH_TO_TALK_KEY = "space"
 
 
 # ---------------------------------------------------------------------------
-# 7. FUSION / TRIGGER-SEVERITY ENGINE - Tier 4
+# 7. THE FUNNEL - tracker + flag engine (turns the 20/sec firehose into
+#    rare, meaningful actions).  See blindspot/flag.py and blindspot/tracker.py.
 # ---------------------------------------------------------------------------
-# Objects we treat as potential hazards when combined with the right sound.
-HAZARD_OBJECTS = {"car", "truck", "bus", "motorcycle", "bicycle", "train"}
 
-# Sound classes (YAMNet labels, matched loosely) that imply motion/danger.
+# --- 7a. Object tracking (persistence, approach, obstruction) ---
+# Two boxes count as the "same object" across frames if their overlap (IoU) is
+# at least this. Lower = more forgiving matching (good for fast movement).
+TRACK_IOU_MATCH = 0.20
+# Drop a track after it's been unseen for this many frames.
+TRACK_MAX_MISSES = 8
+# An object must be seen this many CONSECUTIVE frames before we trust it. This
+# kills 1-frame flickers and YOLO misfires (a big source of false "caution!").
+TRACK_MIN_FRAMES = 3
+# How many recent frames of box-size we keep to measure growth.
+APPROACH_WINDOW_FRAMES = 6
+# An object is "approaching" if its box grew by at least this ratio across the
+# window (1.6 = grew 60%). Higher = only warn on fast loomers.
+APPROACH_GROWTH_RATIO = 1.6
+# ...AND it must already occupy at least this fraction of the frame (so we don't
+# warn about a tiny thing far away that happens to be growing).
+APPROACH_MIN_AREA = 0.04
+# If ANY single box covers at least this fraction of the frame AND stays that big
+# for OBSTRUCTION_MIN_FRAMES in a row, we treat the camera as OBSTRUCTED (a hand
+# over the lens). Raised high + persistence-gated so a normal close-up face at
+# desk distance does NOT constantly trip it.
+OBSTRUCTION_AREA = 0.82
+OBSTRUCTION_MIN_FRAMES = 5
+
+# --- 7b. Safety: obstacles + approaching hazards ---
+# APPROACHING hazards (box growing fast) - these get the most urgent warning.
+DANGER_OBJECTS = {
+    "person", "car", "truck", "bus", "motorcycle", "bicycle",
+    "train", "dog", "skateboard",
+}
+
+# OBSTACLE reflex (the "don't let them trip" rule): ANY object - chair, bag,
+# box, table, backpack, person, anything - that is close AND in the walking path
+# gets an instant caution, even if it's stationary and not in DANGER_OBJECTS.
+# A blind user can trip on a bag; announcing it is our job.
+#
+# An object counts as an obstacle-in-path if:
+#   - its box is at least OBSTACLE_MIN_AREA of the frame (i.e. close), AND
+#   - its center is within the middle OBSTACLE_PATH_FRACTION of the frame width
+#     (i.e. roughly in front, where you'd walk into it).
+# Obstacle warning is a QUIET safety net, not the main voice. Only fire for
+# things that are genuinely VERY close and directly ahead (a real trip risk) -
+# not a laptop sitting on the desk in front of you. The VLM describes everything
+# else; this reflex is just the instant "watch out" a human friend gives once.
+# 0.15 ~= the object fills 15% of the view: roughly 1-1.5m from a chair-sized
+# object. Early enough to stop before hitting it, big enough not to nag about
+# furniture across the room. (0.22 was too late - a chair you were walking
+# into never triggered; 0.06 was too eager - the desk laptop nagged.)
+OBSTACLE_MIN_AREA = 0.15
+OBSTACLE_PATH_FRACTION = 0.50     # center 50% of width = "in your path"
+# Never repeat the same obstacle warning within this many seconds.
+OBSTACLE_SAY_ONCE_SECONDS = 15.0
+# Objects that are never worth warning about as trip hazards (too small / part of
+# the scene, not on the floor). Tune as needed.
+OBSTACLE_IGNORE = {"tie", "clock", "kite", "frisbee"}
+
+# --- 7c. The VLM is the mind ---
+# Instead of Python deciding WHAT and WHEN to narrate, we simply OFFER the VLM a
+# frame periodically (or on change) and let IT decide: speak something new, or
+# reply NOTHING. Memory of recent outputs is passed so it never repeats.
+#
+# Enable the companion (proactive) behaviour at all.
+PROACTIVE_ENABLED = True
+# Offers fire ONLY when the scene actually changes (the SET of objects present
+# changed - something entered or left). A static scene means SILENCE, which is
+# correct: a friend doesn't re-describe the same desk every 10 seconds.
+PROACTIVE_ON_CHANGE = True
+# Optional slow heartbeat: re-offer even without change every N seconds. OFF by
+# default - the 7B model can't reliably say NOTHING for an unchanged scene, so a
+# timer just produces rephrased repeats of the same description.
+PROACTIVE_TIMER_ENABLED = False
+PROACTIVE_INTERVAL_SECONDS = 20.0
+# How many recent spoken lines to show the VLM AND to check no-repeat against.
+MEMORY_LINES = 8
+# HARD no-repeat: if a new VLM answer is at least this similar (0-1) to something
+# recently said, we suppress it in Python. We do NOT trust the 7B model to obey
+# "don't repeat" on its own - this is the deterministic guarantee.
+VLM_DEDUP_SIMILARITY = 0.72
+# Don't repeat the SAME danger warning within this many seconds (the reflex has a
+# short memory too, so it warns once per approaching object, not every frame).
+SAY_ONCE_SECONDS = 8.0
+
+# --- 7d. Global VLM rate limit (protects the paid GPU) ---
+# Never OFFER the VLM more often than this (a direct question always goes through).
+VLM_MIN_INTERVAL_SECONDS = 5.0
+# While the user is MOVING, space-shift updates are rarer - walking is when the
+# instant cautions matter, and a slower rich description avoids talking over them.
+VLM_MIN_INTERVAL_MOVING = 12.0
+
+# --- 7d2. Ego-motion (is the USER moving or sitting?) ---
+# Mean absolute gray diff (0-255) between consecutive downsampled frames above
+# which we call it wearer motion. Walking swings the whole frame -> big diffs;
+# sitting produces tiny ones even when something moves within the scene.
+MOTION_DIFF_THRESHOLD = 9.0
+MOTION_ON_FRAMES = 2      # consecutive high-diff frames to enter "moving"
+MOTION_OFF_FRAMES = 6     # consecutive calm frames to settle back to "still" (~2s)
+
+# --- 7e. Mode-by-voice ---
+# If the user's spoken input contains one of these, it's treated as setting a
+# STANDING INSTRUCTION (how they want BlindSpot to behave) rather than a one-off
+# question. Everything else is a normal question.
+MODE_PHRASES = {
+    "keep me company", "talk to me", "describe everything", "stop talking",
+    "be quiet", "only warn", "only tell me", "from now on", "keep talking",
+    "narrate", "don't talk", "less talking", "more detail",
+}
+
+# --- 7f. Optional sound boost (only used if audio/YAMNet is running) ---
+# If a danger object is approaching AND one of these sounds is heard, we treat it
+# as higher-confidence (the cross-modal sight+sound cue). Purely additive: audio
+# being off never breaks anything.
 HAZARD_SOUNDS = {
     "vehicle", "car", "engine", "truck", "traffic",
     "horn", "honk", "siren", "emergency", "motorcycle", "bus", "train",
 }
-
-# Sound cues that imply a crowd/busy environment.
-CROWD_SOUNDS = {"speech", "babble", "crowd", "chatter", "children", "hubbub"}
-
-# A hazard object must be at least this "big" in the frame (fraction of frame
-# area) to count as "close". Bigger box == closer == scarier.
-HAZARD_CLOSE_AREA = 0.06
-
-# Minimum seconds between two VLM firings, so we never spam the paid GPU.
-VLM_MIN_INTERVAL_SECONDS = 3.0

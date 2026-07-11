@@ -1,0 +1,6 @@
+# Extra requirements for the phone/dashboard web demo (Tier: mobile POC).
+# Install AFTER requirements-core.txt (which already has YOLO, opencv, gradio-client).
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9    # form/JSON body parsing for uploads
+# ngrok is a separate tool (not pip): install from https://ngrok.com/download
