@@ -1,19 +1,18 @@
 """
-Lightweight object tracker - just enough to detect "something is approaching".
+Lightweight object tracker - persistence, approach detection, obstruction.
 
-We do NOT need full multi-object tracking (DeepSORT etc.). We only need to answer
-one question cheaply, every frame:
+We do NOT need full multi-object tracking (DeepSORT etc.). We match detections
+frame-to-frame by label + box overlap (IoU) and maintain a little state per
+object so the rest of the system can be SMART instead of twitchy:
 
-    "Is any object's bounding box GROWING fast?"  (growing box == getting closer)
+  - stable track id      -> so we can remember "already told the user about this"
+  - frames_seen          -> ignore 1-frame flickers (a hand-blob, a YOLO misfire)
+  - area growth history  -> detect something APPROACHING (box growing fast)
+  - obstruction check    -> a box covering most of the frame is a hand/blocked
+                            camera, NOT a person approaching (kills the
+                            "caution! caution!" spam)
 
-Method (simple + fast, pure Python/NumPy-free):
-  - Each frame, match new detections to the previous frame's tracks by label +
-    box overlap (IoU).
-  - For a matched track, compare its current area to a short history.
-  - If the area grew by more than APPROACH_GROWTH_RATIO over the window, and the
-    box is at least APPROACH_MIN_AREA big, we call it "approaching".
-
-This is the cheap, local, INSTANT danger signal. No VLM, no round-trip.
+Everything here is cheap, local, and runs every frame.
 """
 
 from __future__ import annotations
@@ -39,42 +38,64 @@ def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
 
 @dataclass
 class Track:
+    id: int
     label: str
     box: tuple[int, int, int, int]
     area_fraction: float
     horizontal: str
-    # short history of recent area_fractions (oldest -> newest)
-    history: list[float] = field(default_factory=list)
+    distance: str
+    confidence: float
+    history: list[float] = field(default_factory=list)  # recent area fractions
+    frames_seen: int = 1     # how many consecutive frames we've matched it
     misses: int = 0
 
     def growth(self) -> float:
-        """How much the box grew across the history window.
-        Returns newest/oldest ratio (1.0 = no change, 2.0 = doubled)."""
+        """newest/oldest area ratio across the window (1.0 = no change)."""
         if len(self.history) < 2:
             return 1.0
-        oldest = self.history[0]
-        newest = self.history[-1]
+        oldest, newest = self.history[0], self.history[-1]
         if oldest <= 0:
             return 1.0
         return newest / oldest
 
+    def is_stable(self) -> bool:
+        """Seen enough consecutive frames to be trusted (not a flicker)."""
+        return self.frames_seen >= config.TRACK_MIN_FRAMES
+
 
 @dataclass
 class ApproachEvent:
+    track_id: int
     label: str
-    horizontal: str          # left / ahead / right
+    horizontal: str
     area_fraction: float
     growth: float
 
 
+@dataclass
+class TrackerResult:
+    approaches: list[ApproachEvent] = field(default_factory=list)
+    obstructed: bool = False       # camera blocked (hand / too close)
+    stable_tracks: list[Track] = field(default_factory=list)  # trustworthy objs
+
+
 class Tracker:
-    """Matches detections frame-to-frame and flags approaching objects."""
+    """Matches detections frame-to-frame; reports approaches + obstruction."""
 
     def __init__(self):
         self._tracks: list[Track] = []
+        self._next_id = 1
 
-    def update(self, detections: list[Detection]) -> list[ApproachEvent]:
-        # 1) Match each detection to an existing track (same label, best IoU).
+    def update(self, detections: list[Detection]) -> TrackerResult:
+        # --- 0) Obstruction check: is one box swallowing the whole frame? ---
+        # A hand over the lens (or being pressed against something) shows up as a
+        # single giant box. That's NOT an approaching hazard - it's a blocked
+        # camera. Detect it and let the caller stay calm.
+        obstructed = any(
+            d.area_fraction >= config.OBSTRUCTION_AREA for d in detections
+        )
+
+        # --- 1) Match detections to existing tracks (same label, best IoU) ---
         used = set()
         for det in detections:
             best_i, best_iou = -1, 0.0
@@ -90,75 +111,96 @@ class Tracker:
                 tr.box = det.box
                 tr.area_fraction = det.area_fraction
                 tr.horizontal = det.horizontal
+                tr.distance = det.distance
+                tr.confidence = det.confidence
                 tr.history.append(det.area_fraction)
                 if len(tr.history) > config.APPROACH_WINDOW_FRAMES:
                     tr.history.pop(0)
+                tr.frames_seen += 1
                 tr.misses = 0
                 used.add(best_i)
             else:
-                # New object -> new track.
                 self._tracks.append(
                     Track(
+                        id=self._next_id,
                         label=det.label,
                         box=det.box,
                         area_fraction=det.area_fraction,
                         horizontal=det.horizontal,
+                        distance=det.distance,
+                        confidence=det.confidence,
                         history=[det.area_fraction],
                     )
                 )
+                self._next_id += 1
 
-        # 2) Age out tracks we didn't see this frame.
+        # --- 2) Age out tracks we didn't see this frame ---
         for i, tr in enumerate(self._tracks):
             if i not in used:
                 tr.misses += 1
+                tr.frames_seen = 0   # broke the consecutive streak
         self._tracks = [t for t in self._tracks if t.misses <= config.TRACK_MAX_MISSES]
 
-        # 3) Report which tracks are approaching (growing fast + big enough).
+        # If the camera is obstructed, don't emit approach spam - just report it.
+        if obstructed:
+            return TrackerResult(approaches=[], obstructed=True, stable_tracks=[])
+
+        # --- 3) Stable tracks (trustworthy, not flickers) ---
+        stable = [t for t in self._tracks if t.misses == 0 and t.is_stable()]
+
+        # --- 4) Approaches: a STABLE object, big enough, growing fast, and NOT
+        #        an obstruction-sized blob. ---
         events: list[ApproachEvent] = []
-        for tr in self._tracks:
-            if tr.misses != 0:
-                continue
+        for tr in stable:
             if tr.area_fraction < config.APPROACH_MIN_AREA:
                 continue
-            g = tr.growth()
-            if g >= config.APPROACH_GROWTH_RATIO:
+            if tr.area_fraction >= config.OBSTRUCTION_AREA:
+                continue  # too big -> treat as obstruction, not approach
+            if tr.growth() >= config.APPROACH_GROWTH_RATIO:
                 events.append(
                     ApproachEvent(
+                        track_id=tr.id,
                         label=tr.label,
                         horizontal=tr.horizontal,
                         area_fraction=tr.area_fraction,
-                        growth=g,
+                        growth=tr.growth(),
                     )
                 )
-        # Most-grown first (scariest).
         events.sort(key=lambda e: e.growth, reverse=True)
-        return events
+
+        # Biggest (closest) stable tracks first - most relevant to narrate.
+        stable.sort(key=lambda t: t.area_fraction, reverse=True)
+        return TrackerResult(approaches=events, obstructed=False, stable_tracks=stable)
 
 
 # --------------------------------------------------------------------------
 # Standalone logic test:  python -m blindspot.tracker
-# Simulates an object whose box grows over frames -> should fire an approach.
-# No camera / models needed.
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     w, h = 640, 480
 
-    def det(label, area):
-        side = int((area * w * h) ** 0.5)
-        cx = w // 2
-        return Detection(label, 0.9, (cx - side // 2, 10, cx + side // 2, 10 + side), w, h)
+    def det(label, area, side="center"):
+        s = int((area * w * h) ** 0.5)
+        cx = {"left": w // 6, "right": 5 * w // 6}.get(side, w // 2)
+        return Detection(label, 0.9, (cx - s // 2, 10, cx + s // 2, 10 + s), w, h)
 
+    print("== growing person (should approach only AFTER it's stable) ==")
     tr = Tracker()
-    print("Feeding a 'person' whose box grows each frame...")
-    areas = [0.03, 0.045, 0.07, 0.11, 0.17]  # steadily growing
-    for i, a in enumerate(areas):
-        events = tr.update([det("person", a)])
-        tag = "  APPROACHING!" if events else ""
-        print(f"  frame {i}: area={a:.3f}{tag}",
-              [f'{e.label} g={e.growth:.2f}' for e in events])
+    for i, a in enumerate([0.03, 0.05, 0.08, 0.13, 0.20]):
+        r = tr.update([det("person", a)])
+        tag = "APPROACH" if r.approaches else "-"
+        print(f"  frame {i}: area={a:.2f} seen>=min={a>=config.APPROACH_MIN_AREA} -> {tag}")
 
-    print("\nNow a static 'chair' (should NOT approach)...")
+    print("\n== HAND over lens (huge box) -> obstruction, NOT approach ==")
     tr2 = Tracker()
-    for i in range(5):
-        events = tr2.update([det("chair", 0.10)])
-        print(f"  frame {i}: static -> approaching={bool(events)}")
+    for i in range(4):
+        r = tr2.update([det("person", 0.85)])  # 85% of frame
+        print(f"  frame {i}: obstructed={r.obstructed}, approaches={len(r.approaches)}")
+
+    print("\n== one-frame flicker -> ignored (not stable) ==")
+    tr3 = Tracker()
+    r = tr3.update([det("person", 0.15)])
+    print(f"  single frame: stable_tracks={len(r.stable_tracks)} (should be 0)")
+    for _ in range(config.TRACK_MIN_FRAMES):
+        r = tr3.update([det("person", 0.15)])
+    print(f"  after {config.TRACK_MIN_FRAMES} frames: stable_tracks={len(r.stable_tracks)} (should be >=1)")

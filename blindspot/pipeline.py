@@ -66,12 +66,53 @@ class BlindSpot:
             except Exception as e:
                 print(f"[pipeline] push-to-talk OFF ({e}). No spoken questions.")
 
-        self._vlm_busy = threading.Lock()
+        self._vlm_busy = threading.Lock()   # guards background (proactive/refine) calls
+        self._question_busy = False          # True while a question is being answered
+        self._recent_frames: list = []       # small ring buffer for frame selection
+
+    # -- frame selection: keep a few recent frames, pick the sharpest --
+    def _remember_frame(self, frame):
+        self._recent_frames.append(frame)
+        if len(self._recent_frames) > 4:
+            self._recent_frames.pop(0)
+
+    @staticmethod
+    def _sharpness(frame) -> float:
+        """Variance of Laplacian - higher = sharper (less motion blur)."""
+        try:
+            import cv2
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            return 0.0
+
+    def _sharpest_recent(self, current):
+        """Return the sharpest of the recent frames (or a copy of current)."""
+        candidates = self._recent_frames + [current]
+        if not candidates:
+            return current.copy()
+        best = max(candidates, key=self._sharpness)
+        return best.copy()
 
     # -- run the VLM on a background thread so the fast loop never blocks --
     def _fire_vlm_async(self, frame, facts, sounds, question, urgent, tier):
-        if not self._vlm_busy.acquire(blocking=False):
-            return  # a VLM call is already in flight; skip this one
+        """Fire the VLM. QUESTIONS get a guaranteed lane (never dropped);
+        background tiers (proactive/danger-refine) skip if one is already running.
+
+        This fixes the bug where a running proactive description blocked the user's
+        question - the user must always get an answer."""
+        is_question = tier == "question"
+
+        if not is_question:
+            # Background call: skip if the VLM is already busy (no queue needed).
+            if not self._vlm_busy.acquire(blocking=False):
+                return
+        else:
+            # Question: it MUST run. Don't drop it. If a background call holds the
+            # lock, we still proceed on a separate thread (the Space handles the
+            # request; worst case two calls overlap briefly, which is fine).
+            self._question_busy = True
+
         self.flag.mark_vlm_fired()
 
         def work():
@@ -82,7 +123,10 @@ class BlindSpot:
                     print(f"[brain/{tier}] {answer}")
                     self.voice.say(answer, urgent=urgent)
             finally:
-                self._vlm_busy.release()
+                if is_question:
+                    self._question_busy = False
+                else:
+                    self._vlm_busy.release()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -93,6 +137,9 @@ class BlindSpot:
             with Camera() as cam:
                 for frame in cam.frames():
                     t0 = time.time()
+
+                    # Keep a small buffer of recent frames for VLM frame-selection.
+                    self._remember_frame(frame)
 
                     # --- FAST: vision ---
                     dets = self.vision.detect(frame)
@@ -126,25 +173,33 @@ class BlindSpot:
                     # Fire the brain if warranted (async, rate-limited).
                     # For a danger tier this is the SMART FOLLOW-UP after the
                     # instant warning; for question/proactive it's the main reply.
+                    # FRAME SELECTION: send the sharpest of the last few frames,
+                    # so the VLM never reasons over a motion-blurred image (better
+                    # answers, fewer wasted calls).
                     if decision.fire_vlm:
+                        best = self._sharpest_recent(frame)
                         self._fire_vlm_async(
-                            frame.copy(), v_facts, a_facts,
+                            best, v_facts, a_facts,
                             decision.question, decision.urgent, decision.tier,
                         )
 
                     # --- optional debug window ---
                     if self.show_window:
                         import cv2
-                        danger = decision.tier == "danger"
+                        # red for danger/obstruction, else green
+                        alarm = decision.tier in ("danger", "obstructed")
+                        box_color = (0, 0, 255) if alarm else (0, 255, 0)
                         for d in dets:
                             x1, y1, x2, y2 = d.box
-                            color = (0, 0, 255) if danger else (0, 255, 0)
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
                             cv2.putText(frame, d.label, (x1, max(15, y1 - 6)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                        hud = f"{decision.tier}  audio:{a_facts[:40]}"
-                        cv2.putText(frame, hud, (8, 20), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.55, (255, 255, 0), 1)
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
+                        hud = f"[{decision.tier}] {decision.reason}"
+                        cv2.putText(frame, hud, (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6, (255, 255, 0), 2)
+                        if a_facts:
+                            cv2.putText(frame, f"heard: {a_facts[:45]}", (8, 46),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 0), 1)
                         cv2.imshow("BlindSpot - full pipeline", frame)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             break

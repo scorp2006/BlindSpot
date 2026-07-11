@@ -129,12 +129,15 @@ PUSH_TO_TALK_KEY = "space"
 #    rare, meaningful actions).  See blindspot/flag.py and blindspot/tracker.py.
 # ---------------------------------------------------------------------------
 
-# --- 7a. Object tracking (to detect "approaching") ---
+# --- 7a. Object tracking (persistence, approach, obstruction) ---
 # Two boxes count as the "same object" across frames if their overlap (IoU) is
 # at least this. Lower = more forgiving matching (good for fast movement).
 TRACK_IOU_MATCH = 0.20
 # Drop a track after it's been unseen for this many frames.
 TRACK_MAX_MISSES = 8
+# An object must be seen this many CONSECUTIVE frames before we trust it. This
+# kills 1-frame flickers and YOLO misfires (a big source of false "caution!").
+TRACK_MIN_FRAMES = 3
 # How many recent frames of box-size we keep to measure growth.
 APPROACH_WINDOW_FRAMES = 6
 # An object is "approaching" if its box grew by at least this ratio across the
@@ -143,6 +146,11 @@ APPROACH_GROWTH_RATIO = 1.6
 # ...AND it must already occupy at least this fraction of the frame (so we don't
 # warn about a tiny thing far away that happens to be growing).
 APPROACH_MIN_AREA = 0.04
+# If ANY single box covers at least this fraction of the frame, the camera is
+# almost certainly OBSTRUCTED (a hand over the lens, pressed against something).
+# We treat that as "camera blocked", NOT "person approaching" - this is the fix
+# for the "caution! caution!" spam when a hand is in front of the camera.
+OBSTRUCTION_AREA = 0.70
 
 # --- 7b. Which objects are worth an instant danger warning ---
 # Only these labels trigger the INSTANT local "approaching" warning. (Everything
@@ -152,14 +160,32 @@ DANGER_OBJECTS = {
     "train", "dog", "skateboard",
 }
 
-# --- 7c. Proactive (calm) narration ---
-# Enable the slow proactive VLM tick that fires on big scene changes.
-PROACTIVE_ENABLED = True
-# Minimum seconds between proactive VLM ticks (calm-mode rate limit).
-PROACTIVE_INTERVAL_SECONDS = 8.0
+# --- 7c. Steady-companion narration (the "warm constant voice") ---
+# BlindSpot has TWO voices blended into one experience:
+#   FAST (YOLO, local, instant) -> constant gentle narration, fills every moment
+#   SMART (VLM, remote, periodic) -> richer, warmer detail, on change or a timer
+#
+# Enable the constant local narration (YOLO fast lane).
+NARRATION_ENABLED = True
+# Don't speak a fresh local narration more often than this (seconds). Keeps it a
+# calm companion, not a machine gun.
+NARRATION_MIN_INTERVAL_SECONDS = 3.5
+# Don't repeat the SAME idea within this many seconds (say-once memory). If the
+# scene doesn't change, we stay quiet instead of repeating "person ahead".
+SAY_ONCE_SECONDS = 12.0
 
-# --- 7d. Global VLM rate limit (protects the paid GPU) ---
-# Never fire the VLM more often than this, no matter the reason.
+# --- 7d. Proactive VLM (the rich, warm updates) ---
+# Enable the VLM enrichment tick.
+PROACTIVE_ENABLED = True
+# Fire the VLM for a rich update at most this often on the timer (seconds)...
+PROACTIVE_INTERVAL_SECONDS = 7.0
+# ...but ALSO fire it immediately when the scene meaningfully changes (a new
+# important object appears, or the area clearly changes), even before the timer.
+PROACTIVE_ON_CHANGE = True
+
+# --- 7e. Global VLM rate limit (protects the paid GPU) ---
+# Never fire the VLM more often than this, no matter the reason (except a direct
+# user question, which always goes through).
 VLM_MIN_INTERVAL_SECONDS = 3.0
 
 # --- 7e. Optional sound boost (only used if audio/YAMNet is running) ---
