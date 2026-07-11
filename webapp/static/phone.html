@@ -97,7 +97,6 @@ const video=document.getElementById('video'), startBtn=document.getElementById('
       connText=document.getElementById('connText');
 
 let streaming=false, pendingQuestion="", recog=null, wakeActive=false;
-let audioCtx=null, micStream=null, audioNode=null;
 let questionListening=false;   // true while capturing a question (mic priority)
 const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d');
 
@@ -114,50 +113,9 @@ async function startCamera(){
 function grabFrame(){ ctx.drawImage(video,0,0,canvas.width,canvas.height);
   return canvas.toDataURL('image/jpeg',JPEG_QUALITY); }
 
-// --- environmental sound: capture mic, downsample to 16kHz, stream to server ---
-const TARGET_SR = 16000;
-let audioBuf = [];   // accumulates downsampled float32 samples
-async function startMic(){
-  micStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-  const src = audioCtx.createMediaStreamSource(micStream);
-  const proc = audioCtx.createScriptProcessor(4096, 1, 1);
-  const inSR = audioCtx.sampleRate;
-  proc.onaudioprocess = (e)=>{
-    if(!streaming) return;
-    const input = e.inputBuffer.getChannelData(0);
-    // simple linear downsample inSR -> 16000
-    const ratio = inSR / TARGET_SR;
-    for(let i=0; i<input.length; i+=ratio){
-      audioBuf.push(input[Math.floor(i)]);
-    }
-    // Questions WIN: while capturing a question, don't stream sound (the
-    // browser gives the mic to SpeechRecognition; we just drop these samples).
-    if(questionListening){ audioBuf = []; return; }
-    // send ~0.5s at a time
-    if(audioBuf.length >= TARGET_SR*0.5){
-      const chunk = new Float32Array(audioBuf); audioBuf = [];
-      sendAudio(chunk);
-    }
-  };
-  src.connect(proc); proc.connect(audioCtx.destination);
-  audioNode = proc;
-}
-function f32ToB64(f32){
-  const bytes = new Uint8Array(f32.buffer);
-  let bin=""; for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-async function sendAudio(chunk){
-  try{ await fetch(SERVER+"/audio",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({pcm:f32ToB64(chunk)})}); }catch(e){}
-}
-function stopMic(){
-  try{ if(audioNode) audioNode.disconnect(); }catch(e){}
-  try{ if(audioCtx) audioCtx.close(); }catch(e){}
-  try{ if(micStream) micStream.getTracks().forEach(t=>t.stop()); }catch(e){}
-}
+// NOTE: environmental sound (YAMNet) is captured by the LAPTOP mic on the
+// server side. The phone's microphone belongs 100% to questions (wake word +
+// tap-to-talk) - sharing it with an audio stream broke SpeechRecognition.
 
 function setTier(t){ tierEl.textContent=(t||"idle"); tierEl.className="tier t-"+(t||"idle"); }
 
@@ -219,7 +177,6 @@ talkBtn.addEventListener('click',()=>{
 startBtn.addEventListener('click',async()=>{
   try{
     await startCamera();
-    try{ await startMic(); }catch(e){ console.log("mic:",e); } // sound optional
     streaming=true;
     startBtn.style.display="none";
     talkBtn.style.display=""; stopBtn.style.display="";
@@ -231,7 +188,6 @@ startBtn.addEventListener('click',async()=>{
 stopBtn.addEventListener('click',async()=>{
   streaming=false;
   try{ if(recog) recog.stop(); }catch(e){}
-  stopMic();
   try{ if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){}
   try{ await fetch(SERVER+"/stop",{method:"POST"}); }catch(e){}
   speechSynthesis.cancel(); speak("Session ended.");

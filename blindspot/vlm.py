@@ -318,6 +318,21 @@ class VLMBrain:
         return answer.strip().upper().strip(".!") in ("", "NOTHING", "NONE")
 
 
+def too_similar(answer: str, recent: list[str],
+                threshold: float | None = None) -> bool:
+    """Deterministic no-repeat: True if `answer` is essentially a rephrase of
+    something recently said. We enforce this in Python because a 7B model can't
+    be trusted to obey 'do not repeat' in the prompt - it rephrases instead.
+    Questions are never deduped (only proactive companion output)."""
+    import difflib
+    threshold = threshold if threshold is not None else config.VLM_DEDUP_SIMILARITY
+    a = answer.lower().strip()
+    for r in recent:
+        if difflib.SequenceMatcher(None, a, r.lower().strip()).ratio() >= threshold:
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------
 # Standalone test:  python -m blindspot.vlm
 # Uses a single webcam frame (or a black frame if no camera) and asks a question.

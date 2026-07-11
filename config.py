@@ -191,18 +191,24 @@ PROACTIVE_ENABLED = True
 # How often we OFFER the VLM a frame in companion mode (seconds). The VLM still
 # often replies NOTHING, so this is an upper bound on how chatty it can be, not a
 # guarantee it speaks. Raise to make it calmer, lower to make it more talkative.
-PROACTIVE_INTERVAL_SECONDS = 6.0
-# Also offer a frame immediately when the scene meaningfully changes.
+PROACTIVE_INTERVAL_SECONDS = 10.0
+# Also offer a frame immediately when the scene meaningfully changes. "Change"
+# means the SET of objects present changed (something entered/left the scene) -
+# NOT distance jitter as the camera moves. This keeps offers rare and meaningful.
 PROACTIVE_ON_CHANGE = True
 # How many recent spoken lines to show the VLM so it doesn't repeat itself.
 MEMORY_LINES = 5
+# HARD no-repeat: if a new VLM answer is at least this similar (0-1) to something
+# recently said, we suppress it in Python. We do NOT trust the 7B model to obey
+# "don't repeat" on its own - this is the deterministic guarantee.
+VLM_DEDUP_SIMILARITY = 0.72
 # Don't repeat the SAME danger warning within this many seconds (the reflex has a
 # short memory too, so it warns once per approaching object, not every frame).
 SAY_ONCE_SECONDS = 8.0
 
 # --- 7d. Global VLM rate limit (protects the paid GPU) ---
 # Never OFFER the VLM more often than this (a direct question always goes through).
-VLM_MIN_INTERVAL_SECONDS = 3.0
+VLM_MIN_INTERVAL_SECONDS = 5.0
 
 # --- 7e. Mode-by-voice ---
 # If the user's spoken input contains one of these, it's treated as setting a

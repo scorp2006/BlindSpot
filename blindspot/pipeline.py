@@ -131,6 +131,12 @@ class BlindSpot:
                                         question=question,
                                         instruction=instruction, recent=recent)
                 if not VLMBrain.is_silent(answer):
+                    # HARD no-repeat (don't trust the 7B to obey the prompt).
+                    # Questions are never suppressed.
+                    from blindspot.vlm import too_similar
+                    if not is_question and too_similar(answer, self._recent_said):
+                        print(f"[vlm] suppressed near-duplicate: {answer!r}")
+                        return
                     print(f"[brain/{tier}] {answer}")
                     self._remember_said(answer)     # so the VLM won't repeat it
                     self.voice.say(answer, urgent=urgent)

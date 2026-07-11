@@ -33,7 +33,7 @@ import uvicorn
 import config
 from blindspot.vision import VisionModel, facts_line
 from blindspot.flag import FlagEngine
-from blindspot.vlm import VLMBrain
+from blindspot.vlm import VLMBrain, too_similar
 
 import os
 _HERE = os.path.dirname(__file__)
@@ -48,14 +48,18 @@ vision = VisionModel()
 flag = FlagEngine()
 brain = VLMBrain()
 
-# Phone audio (YAMNet) is optional + lazy - only loads if the phone streams audio.
-_phone_audio = None
-def _get_phone_audio():
-    global _phone_audio
-    if _phone_audio is None:
-        from blindspot.audio import PhoneAudio
-        _phone_audio = PhoneAudio()
-    return _phone_audio
+# Environmental sound comes from the LAPTOP microphone (AudioScene/YAMNet).
+# The phone's mic belongs 100% to questions (wake word + tap-to-talk) - sharing
+# it between SpeechRecognition and audio streaming broke questions entirely.
+# In a demo room the laptop hears the same ambient sound anyway. Fail-soft.
+_audio_scene = None
+try:
+    from blindspot.audio import AudioScene
+    _audio_scene = AudioScene()
+    _audio_scene.start()
+    print("[server] audio (laptop mic, YAMNet) ON")
+except Exception as e:
+    print(f"[server] audio OFF ({e}) - running vision-only")
 
 print("[server] models ready.")
 
@@ -79,6 +83,26 @@ _question_busy = {"on": False}
 _recent_said: list[str] = []       # memory the VLM sees (no-repeat)
 _instruction = {"text": ""}        # user's standing "behave like this" wish
 _audio_warned = {"done": False}    # so we log the "no TF" note only once
+
+# Small buffer of recent frames so the VLM gets the SHARPEST one, not whatever
+# motion-blurred frame happened to arrive when we decided to fire.
+from collections import deque
+_frames_buf: deque = deque(maxlen=4)
+
+
+def _sharpest(current):
+    """Pick the sharpest recent frame (variance of Laplacian)."""
+    import cv2
+
+    def sharp(f):
+        try:
+            return float(cv2.Laplacian(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY),
+                                       cv2.CV_64F).var())
+        except Exception:
+            return 0.0
+
+    candidates = list(_frames_buf) + [current]
+    return max(candidates, key=sharp).copy()
 
 
 def _remember_said(text: str):
@@ -113,6 +137,12 @@ def _fire_vlm(frame, facts, sounds, question, tier):
             ans = brain.ask(frame, facts=facts, sounds=sounds, question=question,
                             instruction=instruction, recent=recent)
             if not VLMBrain.is_silent(ans):
+                # HARD no-repeat: the 7B rephrases the same scene instead of
+                # saying NOTHING, so we enforce dedup here. Questions are never
+                # suppressed - the user asked, they get an answer.
+                if not is_q and too_similar(ans, _recent_said):
+                    print(f"[vlm] suppressed near-duplicate: {ans!r}")
+                    return
                 _remember_said(ans)
                 with _state_lock:
                     _latest["spoken"] = ans
@@ -162,14 +192,14 @@ async def frame(request: Request):
             _latest["frames"] += 1
             _latest["last_frame_ts"] = time.time()
             _latest["phone_connected"] = True
+        _frames_buf.append(frame_bgr)
 
     question = (data.get("question") or "").strip()
-    # Environmental sound now comes from the PHONE (via /audio), classified by
-    # YAMNet on the server. Read the latest result if the phone has streamed any.
+    # Environmental sound: laptop mic (AudioScene/YAMNet), fail-soft.
     a_words: set[str] = set()
     a_facts = ""
-    if _phone_audio is not None:
-        ar = _phone_audio.latest()
+    if _audio_scene is not None:
+        ar = _audio_scene.latest()
         a_words = ar.label_set()
         a_facts = ar.facts_line()
 
@@ -194,9 +224,9 @@ async def frame(request: Request):
         to_speak.append(decision.speak_now)
         _remember_said(decision.speak_now)
 
-    # fire VLM if warranted
+    # fire VLM if warranted - with the SHARPEST recent frame, not a blurry one
     if decision.fire_vlm and frame_bgr is not None:
-        _fire_vlm(frame_bgr.copy(), v_facts, a_facts, decision.question, decision.tier)
+        _fire_vlm(_sharpest(frame_bgr), v_facts, a_facts, decision.question, decision.tier)
 
     # collect any VLM speech that finished since last poll
     while _pending_speech:
@@ -222,26 +252,10 @@ async def frame(request: Request):
 
 @app.post("/audio")
 async def audio(request: Request):
-    """Phone streams mic audio here (base64 float32 PCM @16kHz mono). We feed it
-    to YAMNet so environmental sound works on the phone."""
-    if not _latest["running"]:
-        return {"ok": False, "stopped": True}
-    data = await request.json()
-    # Sound is OPTIONAL. If YAMNet/TensorFlow isn't installed, or a chunk is bad,
-    # we fail SILENTLY (200 ok:false) so the phone never spams errors and the rest
-    # of the system keeps working without sound.
-    try:
-        raw = base64.b64decode(data.get("pcm", ""))
-        chunk = np.frombuffer(raw, dtype=np.float32)
-        if chunk.size:
-            _get_phone_audio().push(chunk)
-    except Exception as e:
-        if not _audio_warned["done"]:
-            print(f"[phone-audio] disabled ({e})")
-            _audio_warned["done"] = True
-        return {"ok": False, "audio_available": False}
-    with _state_lock:
-        return {"ok": True, "sounds": _latest["sounds"]}
+    """Kept for compatibility. Environmental sound now comes from the LAPTOP mic
+    (AudioScene) - phone audio streaming broke the phone's question mic, so the
+    phone no longer sends audio. This endpoint just acknowledges and ignores."""
+    return {"ok": False, "note": "environmental sound uses the laptop mic now"}
 
 
 @app.post("/stop")

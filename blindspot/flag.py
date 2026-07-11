@@ -83,7 +83,10 @@ class FlagEngine:
 
     @staticmethod
     def _scene_key(tracks: list[Track]) -> str:
-        return "|".join(f"{t.label}:{t.distance}" for t in tracks[:3])
+        # The SET of object types present - NOT their distances/positions. As the
+        # camera moves, distances jitter constantly; that must not count as "the
+        # scene changed". Only something entering or leaving the scene counts.
+        return "|".join(sorted({t.label for t in tracks[:6]}))
 
     def _danger_fresh(self, key: str) -> bool:
         now = time.time()
