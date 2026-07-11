@@ -40,10 +40,12 @@ class BlindSpot:
         self.show_window = show_window
 
         # Always-on core.
+        from blindspot.motion import MotionEstimator
         self.vision = VisionModel()
         self.voice = Voice()
         self.brain = VLMBrain()
         self.flag = FlagEngine()
+        self.motion = MotionEstimator()
 
         # Optional modalities - fail soft.
         self.audio = None
@@ -159,6 +161,9 @@ class BlindSpot:
                     # Keep a small buffer of recent frames for VLM frame-selection.
                     self._remember_frame(frame)
 
+                    # --- FAST: is the wearer moving or sitting still? ---
+                    user_moving = self.motion.update(frame)
+
                     # --- FAST: vision ---
                     dets = self.vision.detect(frame)
                     v_facts = facts_line(dets)
@@ -179,7 +184,8 @@ class BlindSpot:
                             question = q
 
                     # --- THE FUNNEL: one decision for this frame ---
-                    decision = self.flag.decide(dets, a_words, question)
+                    decision = self.flag.decide(dets, a_words, question,
+                                                user_moving=user_moving)
 
                     if decision.tier != "silent":
                         print(f"[flag] {decision.tier}: {decision.reason}")

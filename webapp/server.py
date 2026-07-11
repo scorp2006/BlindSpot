@@ -43,10 +43,13 @@ _STATIC = os.path.join(_HERE, "static")
 # ---------------------------------------------------------------------------
 # One shared brain (loaded once). For a hackathon demo, a single session is fine.
 # ---------------------------------------------------------------------------
+from blindspot.motion import MotionEstimator
+
 print("[server] loading models...")
 vision = VisionModel()
 flag = FlagEngine()
 brain = VLMBrain()
+motion = MotionEstimator()
 
 # Environmental sound comes from the LAPTOP microphone (AudioScene/YAMNet).
 # The phone's mic belongs 100% to questions (wake word + tap-to-talk) - sharing
@@ -203,15 +206,17 @@ async def frame(request: Request):
         a_words = ar.label_set()
         a_facts = ar.facts_line()
 
+    user_moving = True
     if frame_bgr is None:
         # Question with no fresh frame -> nothing to see; still let VLM try.
         dets = []
         v_facts = ""
     else:
+        user_moving = motion.update(frame_bgr)   # is the WEARER moving?
         dets = vision.detect(frame_bgr)
         v_facts = facts_line(dets)
 
-    decision = flag.decide(dets, a_words, question)
+    decision = flag.decide(dets, a_words, question, user_moving=user_moving)
 
     # user set a standing instruction ("keep me company", etc.)
     if decision.tier == "set_mode" and decision.instruction:
@@ -249,6 +254,7 @@ async def frame(request: Request):
             for d in dets[:8]
         ]
         _latest["sounds"] = a_facts
+        _latest["moving"] = user_moving
         _latest["ts"] = time.time()
         if to_speak:
             _latest["spoken"] = to_speak[-1]

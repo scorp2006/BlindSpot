@@ -74,8 +74,12 @@ class FlagEngine:
         self._danger_said: dict[str, float] = {}
         self._obstacle_said: dict[str, float] = {}
 
-    def _vlm_allowed(self) -> bool:
-        return (time.time() - self._last_vlm_fire) >= config.VLM_MIN_INTERVAL_SECONDS
+    def _vlm_allowed(self, user_moving: bool = False) -> bool:
+        # While the user walks, rich updates are rarer - the instant cautions do
+        # the safety work and the VLM only marks bigger "space shifts".
+        interval = (config.VLM_MIN_INTERVAL_MOVING if user_moving
+                    else config.VLM_MIN_INTERVAL_SECONDS)
+        return (time.time() - self._last_vlm_fire) >= interval
 
     def mark_vlm_fired(self):
         self._last_vlm_fire = time.time()
@@ -128,6 +132,7 @@ class FlagEngine:
         detections: list[Detection],
         audio_words: set[str] | None = None,
         question: str = "",
+        user_moving: bool = True,
     ) -> Decision:
         audio_words = audio_words or set()
         now = time.time()
@@ -169,8 +174,10 @@ class FlagEngine:
                     if _sound_matches(audio_words, config.HAZARD_SOUNDS):
                         safety_msg = safety_msg.rstrip(".") + " — I can hear it too."
                     safety_tier = "danger"
-            # else: a VERY close obstacle directly in the path (trip hazard)
-            if not safety_msg:
+            # else: a close obstacle directly in the path (trip hazard). ONLY
+            # while the user is MOVING - seated, the laptop in front of you is
+            # furniture, not a hazard, and warning about it is pure noise.
+            if not safety_msg and user_moving:
                 obs = self._closest_obstacle(result.stable_tracks)
                 if obs is not None:
                     # key on label+distance (stable) so re-acquired tracks don't
@@ -192,26 +199,30 @@ class FlagEngine:
                      and (now - self._last_offer) >= config.PROACTIVE_INTERVAL_SECONDS)
         offer = (config.PROACTIVE_ENABLED
                  and (timer_due or (config.PROACTIVE_ON_CHANGE and changed))
-                 and self._vlm_allowed())
-        # CRITICAL: only commit the new scene key when the offer actually fires.
-        # If the change arrived while the VLM was rate-limited/busy, the change
-        # stays PENDING and fires as soon as the VLM is allowed again. (The old
-        # code overwrote the key unconditionally - a change that landed in the
-        # 5s cooldown window was swallowed forever and the companion went mute.)
-        if offer:
+                 and self._vlm_allowed(user_moving))
+
+        def _commit_offer():
+            # CRITICAL: commit the scene key only when the offer is actually
+            # USED. A change that lands while the VLM is rate-limited/busy (or
+            # gets pre-empted by a caution) stays PENDING and fires as soon as
+            # the VLM is allowed - otherwise the companion goes mute.
             self._last_scene_key = scene_key
             self._last_offer = now
 
-        # Combine: speak the safety note NOW (if any) AND still let the VLM
-        # describe/interpret the scene in the same turn. Human-like: a quick
-        # "watch the chair" plus the ongoing narration.
         if safety_msg:
+            # An OBSTACLE caution stands alone - short, instant, done. No VLM
+            # echo about the same object (that redundancy annoyed users). Only
+            # a real approaching DANGER gets a VLM follow-up with detail.
+            use_vlm = offer and safety_tier == "danger"
+            if use_vlm:
+                _commit_offer()
             return Decision(
                 tier=safety_tier, speak_now=safety_msg, urgent=True,
-                fire_vlm=offer,
-                reason=f"{safety_tier} + {'offer' if offer else 'no-offer'}",
+                fire_vlm=use_vlm,
+                reason=f"{safety_tier}{' + vlm follow-up' if use_vlm else ''}",
             )
         if offer:
+            _commit_offer()
             return Decision(
                 tier="offer", speak_now="", urgent=False, fire_vlm=True,
                 reason=f"offer to VLM ({'change' if changed else 'timer'})",

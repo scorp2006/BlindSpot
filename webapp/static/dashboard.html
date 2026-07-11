@@ -140,6 +140,7 @@
     <div class="spacer"></div>
     <div class="stat" id="stat-mode">vlm · —</div>
     <div class="stat" id="stat-fps">frames · 0</div>
+    <div class="stat" id="stat-motion">user · —</div>
   </aside>
 
   <!-- top bar -->
@@ -287,6 +288,7 @@ async function poll(){
     $("m-frames").textContent = s.frames || 0;
     $("m-vlm").textContent = vlmCalls;
     $("stat-fps").textContent = "frames · " + (s.frames || 0);
+    $("stat-motion").textContent = "user · " + (phone ? (s.moving ? "moving" : "still") : "—");
   }catch(e){
     $("conn").className = "conn"; $("connText").textContent = "waiting for server";
   }

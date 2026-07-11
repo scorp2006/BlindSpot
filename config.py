@@ -214,6 +214,17 @@ SAY_ONCE_SECONDS = 8.0
 # --- 7d. Global VLM rate limit (protects the paid GPU) ---
 # Never OFFER the VLM more often than this (a direct question always goes through).
 VLM_MIN_INTERVAL_SECONDS = 5.0
+# While the user is MOVING, space-shift updates are rarer - walking is when the
+# instant cautions matter, and a slower rich description avoids talking over them.
+VLM_MIN_INTERVAL_MOVING = 12.0
+
+# --- 7d2. Ego-motion (is the USER moving or sitting?) ---
+# Mean absolute gray diff (0-255) between consecutive downsampled frames above
+# which we call it wearer motion. Walking swings the whole frame -> big diffs;
+# sitting produces tiny ones even when something moves within the scene.
+MOTION_DIFF_THRESHOLD = 9.0
+MOTION_ON_FRAMES = 2      # consecutive high-diff frames to enter "moving"
+MOTION_OFF_FRAMES = 6     # consecutive calm frames to settle back to "still" (~2s)
 
 # --- 7e. Mode-by-voice ---
 # If the user's spoken input contains one of these, it's treated as setting a
