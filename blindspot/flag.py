@@ -45,10 +45,17 @@ class Decision:
     reason: str = ""
 
 
+def _lang():
+    return config.SAFETY_STRINGS.get(config.RESPONSE_LANGUAGE,
+                                     config.SAFETY_STRINGS["en"])
+
+
 def _approach_phrase(ev: ApproachEvent) -> str:
+    s = _lang()
     if ev.horizontal == "ahead":
-        return f"Careful, a {ev.label} is approaching ahead."
-    return f"Careful, a {ev.label} is approaching on your {ev.horizontal}."
+        return s["approach_ahead"].format(label=ev.label)
+    return s["approach_side"].format(label=ev.label, side=s["sides"].get(
+        ev.horizontal, ev.horizontal))
 
 
 def _sound_matches(audio_words: set[str], vocab: set[str]) -> bool:
@@ -172,7 +179,7 @@ class FlagEngine:
                 if self._danger_fresh(f"{ev.label}:{ev.horizontal}"):
                     safety_msg = _approach_phrase(ev)
                     if _sound_matches(audio_words, config.HAZARD_SOUNDS):
-                        safety_msg = safety_msg.rstrip(".") + " — I can hear it too."
+                        safety_msg = safety_msg.rstrip(".") + _lang()["sound_add"]
                     safety_tier = "danger"
             # else: a close obstacle directly in the path (trip hazard). ONLY
             # while the user is MOVING - seated, the laptop in front of you is
@@ -183,10 +190,13 @@ class FlagEngine:
                     # key on label+distance (stable) so re-acquired tracks don't
                     # re-trigger; truly say-once until it changes or time passes.
                     if self._obstacle_fresh(f"{obs.label}:{obs.distance}:{obs.horizontal}"):
-                        art = "an" if obs.label[0] in "aeiou" else "a"
-                        where = "right in front of you" if obs.horizontal == "ahead" \
-                                else f"on your {obs.horizontal}"
-                        safety_msg = f"Careful, {art} {obs.label} {where}."
+                        s = _lang()
+                        if obs.horizontal == "ahead":
+                            safety_msg = s["obstacle_ahead"].format(label=obs.label)
+                        else:
+                            safety_msg = s["obstacle_side"].format(
+                                label=obs.label,
+                                side=s["sides"].get(obs.horizontal, obs.horizontal))
                         safety_tier = "obstacle"
 
         # 🧠 Decide whether to OFFER a frame to the VLM (the primary companion).

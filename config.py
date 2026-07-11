@@ -104,6 +104,50 @@ VLM_TIMEOUT = 60
 
 
 # ---------------------------------------------------------------------------
+# 4b. LANGUAGE (multilingual output + input)
+# ---------------------------------------------------------------------------
+# The VLM brain (Qwen2.5-VL) is multilingual, so we do NOT touch the HF Space.
+# We just tell it which language to answer in (via the standing-instruction
+# field), and set the phone voice + Whisper to match. Wake word stays English.
+#   "en" English · "te" Telugu · "hi" Hindi
+RESPONSE_LANGUAGE = os.getenv("BLINDSPOT_LANG", "en")
+
+# Human name + the VLM directive + BCP-47 tag for browser TTS + Whisper code,
+# per supported language. Add more rows to support more languages.
+LANGUAGES = {
+    "en": {"name": "English",  "say": "Reply in English.",
+           "tts": "en-US", "whisper": "en"},
+    "te": {"name": "Telugu",   "say": "Reply in Telugu (తెలుగు) only.",
+           "tts": "te-IN", "whisper": "te"},
+    "hi": {"name": "Hindi",    "say": "Reply in Hindi (हिन्दी) only.",
+           "tts": "hi-IN", "whisper": "hi"},
+}
+
+# Localized preset strings for the INSTANT local safety cautions (spoken before
+# the VLM, so they can't be translated by it). Keys must match LANGUAGES.
+SAFETY_STRINGS = {
+    "en": {"approach_ahead": "Careful, a {label} is approaching ahead.",
+           "approach_side":  "Careful, a {label} is approaching on your {side}.",
+           "obstacle_ahead": "Careful, a {label} right in front of you.",
+           "obstacle_side":  "Careful, a {label} on your {side}.",
+           "sound_add": " I can hear it too.",
+           "sides": {"left": "left", "right": "right", "ahead": "ahead"}},
+    "te": {"approach_ahead": "జాగ్రత్త, ఒక {label} ముందుకు వస్తోంది.",
+           "approach_side":  "జాగ్రత్త, మీ {side} వైపు ఒక {label} వస్తోంది.",
+           "obstacle_ahead": "జాగ్రత్త, మీ ముందు ఒక {label} ఉంది.",
+           "obstacle_side":  "జాగ్రత్త, మీ {side} వైపు ఒక {label} ఉంది.",
+           "sound_add": " నాకు అది వినిపిస్తోంది కూడా.",
+           "sides": {"left": "ఎడమ", "right": "కుడి", "ahead": "ముందు"}},
+    "hi": {"approach_ahead": "सावधान, एक {label} आगे से आ रहा है.",
+           "approach_side":  "सावधान, आपके {side} ओर एक {label} आ रहा है.",
+           "obstacle_ahead": "सावधान, आपके ठीक सामने एक {label} है.",
+           "obstacle_side":  "सावधान, आपके {side} ओर एक {label} है.",
+           "sound_add": " मुझे यह सुनाई भी दे रहा है.",
+           "sides": {"left": "बाएं", "right": "दाएं", "ahead": "सामने"}},
+}
+
+
+# ---------------------------------------------------------------------------
 # 5. AUDIO SCENE (YAMNet) - Tier 3, optional install
 # ---------------------------------------------------------------------------
 YAMNET_HANDLE = "https://tfhub.dev/google/yamnet/1"

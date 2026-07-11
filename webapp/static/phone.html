@@ -78,10 +78,16 @@
     </div>
 
     <div class="controls">
+      <select id="langSel" style="background:var(--panel);color:var(--text);
+        border:1px solid var(--line2);border-radius:12px;padding:12px;font-size:15px;">
+        <option value="en">🗣 English</option>
+        <option value="te">🗣 తెలుగు (Telugu)</option>
+        <option value="hi">🗣 हिन्दी (Hindi)</option>
+      </select>
       <button id="startBtn">Start BlindSpot</button>
       <button id="talkBtn" style="display:none">🎤 Tap to ask</button>
       <button id="stopBtn" style="display:none">■ End session</button>
-      <div class="hint">wake word <b>“Hey BlindSpot”</b> · or tap the mic</div>
+      <div class="hint">wake word <b>“Hey BlindSpot”</b> (always English) · or tap the mic</div>
     </div>
   </div>
 
@@ -98,6 +104,20 @@ const video=document.getElementById('video'), startBtn=document.getElementById('
 
 let streaming=false, pendingQuestion="", recog=null, wakeActive=false;
 let questionListening=false;   // true while capturing a question (mic priority)
+let ttsLang="en-US", questionLang="en-US";   // spoken output + question capture
+const langSel=document.getElementById('langSel');
+
+// Map the picked language -> BCP-47 tags for TTS + question recognition. The
+// WAKE WORD recognizer always stays en-US (brand), only questions switch.
+const LANG_TAGS = { en:"en-US", te:"te-IN", hi:"hi-IN" };
+async function applyLanguage(code){
+  ttsLang = questionLang = (LANG_TAGS[code] || "en-US");
+  pickVoice();  // re-select a voice matching the new language if available
+  try{ await fetch(SERVER+"/lang",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({code})}); }catch(e){}
+}
+langSel.addEventListener('change',()=>applyLanguage(langSel.value));
 const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d');
 
 // iOS Safari blocks speechSynthesis until it's "unlocked" by a real user tap,
@@ -105,7 +125,10 @@ const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d');
 let ttsReady=false, ttsVoice=null;
 function pickVoice(){
   const vs=speechSynthesis.getVoices()||[];
-  ttsVoice = vs.find(v=>/en[-_]US/i.test(v.lang)) || vs.find(v=>/^en/i.test(v.lang)) || vs[0] || null;
+  const base=(ttsLang||"en-US").split("-")[0];
+  ttsVoice = vs.find(v=>v.lang && v.lang.toLowerCase()===ttsLang.toLowerCase())
+          || vs.find(v=>v.lang && v.lang.toLowerCase().startsWith(base))
+          || vs.find(v=>/^en/i.test(v.lang)) || vs[0] || null;
 }
 if('speechSynthesis' in window){
   pickVoice(); speechSynthesis.onvoiceschanged=pickVoice;
@@ -123,7 +146,7 @@ function speak(text){
   try{
     if(speechSynthesis.paused) speechSynthesis.resume();  // iOS lock/idle
     const u=new SpeechSynthesisUtterance(text);
-    u.rate=1.02; if(ttsVoice) u.voice=ttsVoice;
+    u.rate=1.02; u.lang=ttsLang; if(ttsVoice) u.voice=ttsVoice;
     speechSynthesis.cancel(); speechSynthesis.speak(u);
   }catch(e){}
 }
@@ -189,7 +212,7 @@ talkBtn.addEventListener('click',()=>{
   // one - accumulating recognizers is what made questions slower and slower).
   wakeSuspended=true; questionListening=true;
   try{ if(recog) recog.stop(); }catch(e){}
-  const one=new SR(); one.lang="en-US"; one.interimResults=false;
+  const one=new SR(); one.lang=questionLang; one.interimResults=false;  // question in chosen language
   talkBtn.classList.add('listening'); msg.textContent="Listening… ask your question.";
   one.onresult=(ev)=>{ const q=ev.results[0][0].transcript.trim();
     pendingQuestion=q; msg.textContent="“"+q+"”"; };
@@ -207,6 +230,7 @@ talkBtn.addEventListener('click',()=>{
 startBtn.addEventListener('click',async()=>{
   try{
     unlockTTS();   // MUST be inside this tap so iOS lets us speak later
+    await applyLanguage(langSel.value);   // sync chosen language to server + TTS
     // Tell the server to begin a FRESH session (also un-does a previous End -
     // without this, a phone joining after another phone ended stays frozen).
     try{ await fetch(SERVER+"/start",{method:"POST"}); }catch(e){}
