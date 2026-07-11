@@ -224,9 +224,15 @@ async def frame(request: Request):
         to_speak.append(decision.speak_now)
         _remember_said(decision.speak_now)
 
-    # fire VLM if warranted - with the SHARPEST recent frame, not a blurry one
+    # fire VLM if warranted - with the SHARPEST recent frame, not a blurry one.
+    # For a hazard follow-up, tell the VLM explicitly that a warning was just
+    # issued so it focuses on the hazard instead of calmly describing the room.
     if decision.fire_vlm and frame_bgr is not None:
-        _fire_vlm(_sharpest(frame_bgr), v_facts, a_facts, decision.question, decision.tier)
+        vlm_q = decision.question
+        if decision.tier in ("danger", "obstacle") and decision.speak_now:
+            vlm_q = (f"Alert - I was just warned: '{decision.speak_now}' "
+                     "Quickly tell me what it is and how to avoid it.")
+        _fire_vlm(_sharpest(frame_bgr), v_facts, a_facts, vlm_q, decision.tier)
 
     # collect any VLM speech that finished since last poll
     while _pending_speech:

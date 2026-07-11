@@ -183,10 +183,13 @@ class FlagEngine:
                         safety_tier = "obstacle"
 
         # 🧠 Decide whether to OFFER a frame to the VLM (the primary companion).
+        # CHANGE-DRIVEN: an offer happens when the set of objects around the user
+        # actually changes. Python owns this judgment - the 7B can't self-govern.
         stable = result.stable_tracks
         scene_key = self._scene_key(stable)
         changed = bool(scene_key) and scene_key != self._last_scene_key
-        timer_due = (now - self._last_offer) >= config.PROACTIVE_INTERVAL_SECONDS
+        timer_due = (config.PROACTIVE_TIMER_ENABLED
+                     and (now - self._last_offer) >= config.PROACTIVE_INTERVAL_SECONDS)
         offer = (config.PROACTIVE_ENABLED
                  and (timer_due or (config.PROACTIVE_ON_CHANGE and changed))
                  and self._vlm_allowed())

@@ -203,9 +203,13 @@ class BlindSpot:
                     # answers, fewer wasted calls).
                     if decision.fire_vlm:
                         best = self._sharpest_recent(frame)
+                        vlm_q = decision.question
+                        if decision.tier in ("danger", "obstacle") and decision.speak_now:
+                            vlm_q = (f"Alert - I was just warned: '{decision.speak_now}' "
+                                     "Quickly tell me what it is and how to avoid it.")
                         self._fire_vlm_async(
                             best, v_facts, a_facts,
-                            decision.question, decision.urgent, decision.tier,
+                            vlm_q, decision.urgent, decision.tier,
                         )
 
                     # --- optional debug window ---

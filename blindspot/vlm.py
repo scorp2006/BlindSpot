@@ -51,12 +51,22 @@ def build_prompt(facts: str, sounds: str, question: str,
     recent = recent or []
     lines = [
         "You are BlindSpot, a warm, perceptive companion for a blind user. "
-        "You are their eyes: you see the camera image and help them feel oriented "
-        "and safe, like a trusted friend beside them.",
+        "You are their eyes: you see through a camera they wear and help them "
+        "feel oriented and safe, like a trusted friend beside them.",
         "Sensor hints (may be imperfect, trust your own eyes more):",
         f"  - Objects (vision): {facts or 'none'}.",
         f"  - Sounds (audio): {sounds or 'none'}.",
-        "Describe only what you genuinely see; never invent details.",
+        "Hard rules:",
+        "  - Speak directly TO the user as 'you'. You are describing THEIR "
+        "surroundings, never a picture. NEVER say 'the image', 'the frame', "
+        "'the photo', or 'the scene shows'.",
+        "  - The user's own arms or hands may appear at the edges of the view. "
+        "They are the user's own body, not another person - never describe or "
+        "warn about them.",
+        "  - Never pad your reply with filler like 'Nothing unusual detected'. "
+        "If there is nothing worth saying, your ENTIRE reply must be the single "
+        "word NOTHING.",
+        "  - Describe only what you genuinely see; never invent details.",
     ]
 
     if instruction:
@@ -310,12 +320,43 @@ class VLMBrain:
             print(f"[vlm] error: {e}")
             # Proactive failures stay silent; a real question gets an apology.
             return "Sorry, I could not reach the vision brain." if question else "NOTHING"
-        return (answer or "NOTHING").strip()
+        # Deterministic cleanup: strip report-voice prefixes and filler so the
+        # user always hears a companion, never a CCTV log.
+        return clean_answer(answer)
 
     @staticmethod
     def is_silent(answer: str) -> bool:
         """True if the VLM decided nothing should be spoken."""
         return answer.strip().upper().strip(".!") in ("", "NOTHING", "NONE")
+
+
+import re
+
+# The 7B slips into surveillance-report voice no matter what the prompt says.
+# We clean its output DETERMINISTICALLY so the user always hears a companion:
+#   "The image shows a laptop on a desk. Nothing unusual detected."
+#       -> "A laptop on a desk."   (or NOTHING if that's all there was)
+_ANSWER_PREFIX = re.compile(
+    r"^\s*(?:the\s+(?:image|frame|picture|photo|scene)\s+"
+    r"(?:shows|depicts|displays|contains|captures|features)|"
+    r"in\s+the\s+(?:image|frame|picture|photo)[,:]?)\s*",
+    re.IGNORECASE)
+_ANSWER_FILLER = re.compile(
+    r"\s*(?:nothing\s+(?:unusual|notable|significant|new)"
+    r"(?:\s+is)?(?:\s+(?:detected|visible|noted|observed|happening))?|"
+    r"no\s+(?:hazards?|dangers?|threats?)"
+    r"(?:\s+are)?(?:\s+(?:detected|visible|present|observed))?)\s*[.!]?\s*$",
+    re.IGNORECASE)
+
+
+def clean_answer(text: str) -> str:
+    """Normalize a raw VLM reply into a spoken-companion sentence."""
+    t = (text or "").strip()
+    t = _ANSWER_PREFIX.sub("", t).strip()
+    t = _ANSWER_FILLER.sub("", t).strip()
+    if len(t) < 3:
+        return "NOTHING"
+    return t[0].upper() + t[1:]
 
 
 def too_similar(answer: str, recent: list[str],

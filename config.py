@@ -188,16 +188,17 @@ OBSTACLE_IGNORE = {"tie", "clock", "kite", "frisbee"}
 #
 # Enable the companion (proactive) behaviour at all.
 PROACTIVE_ENABLED = True
-# How often we OFFER the VLM a frame in companion mode (seconds). The VLM still
-# often replies NOTHING, so this is an upper bound on how chatty it can be, not a
-# guarantee it speaks. Raise to make it calmer, lower to make it more talkative.
-PROACTIVE_INTERVAL_SECONDS = 10.0
-# Also offer a frame immediately when the scene meaningfully changes. "Change"
-# means the SET of objects present changed (something entered/left the scene) -
-# NOT distance jitter as the camera moves. This keeps offers rare and meaningful.
+# Offers fire ONLY when the scene actually changes (the SET of objects present
+# changed - something entered or left). A static scene means SILENCE, which is
+# correct: a friend doesn't re-describe the same desk every 10 seconds.
 PROACTIVE_ON_CHANGE = True
-# How many recent spoken lines to show the VLM so it doesn't repeat itself.
-MEMORY_LINES = 5
+# Optional slow heartbeat: re-offer even without change every N seconds. OFF by
+# default - the 7B model can't reliably say NOTHING for an unchanged scene, so a
+# timer just produces rephrased repeats of the same description.
+PROACTIVE_TIMER_ENABLED = False
+PROACTIVE_INTERVAL_SECONDS = 20.0
+# How many recent spoken lines to show the VLM AND to check no-repeat against.
+MEMORY_LINES = 8
 # HARD no-repeat: if a new VLM answer is at least this similar (0-1) to something
 # recently said, we suppress it in Python. We do NOT trust the 7B model to obey
 # "don't repeat" on its own - this is the deterministic guarantee.
